@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "portrait-studio": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/server/index.mjs"
+      ],
+      "env": {},
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}

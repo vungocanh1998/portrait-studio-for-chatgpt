@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "portrait-studio-for-chatgpt",
+  "version": "0.2.2",
+  "description": "A local, deterministic JPEG and PNG portrait editor with optional ChatGPT reference analysis.",
+  "license": "MIT",
+  "author": {
+    "name": "Ngoc Anh"
+  },
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Portrait Studio for ChatGPT",
+        "shortDescription": "Edit portraits in ChatGPT",
+        "longDescription": "Preview deterministic color adjustments, crop, use a manual clone brush, and export a full-resolution lossless PNG. Image editing stays in the app UI. ChatGPT sees a reference image only after you choose Ask ChatGPT.",
+        "developerName": "Ngoc Anh",
+        "capabilities": ["Interactive", "Image editing"],
+        "defaultPrompt": "Open Portrait Studio for ChatGPT to preview and export a portrait edit."
+      }
+    }
+  }
+}
