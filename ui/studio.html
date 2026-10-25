@@ -112,10 +112,15 @@
             <p class="subtitle">A careful, local portrait-editing workspace</p>
           </div>
         </div>
-        <button id="fullscreen-button" type="button" hidden>Open full screen</button>
+        <div class="actions">
+          <button id="sync-from-chat" type="button" disabled>Sync from Chat</button>
+          <button id="undo-edit" type="button" disabled>Undo edit</button>
+          <button id="redo-edit" type="button" disabled>Redo edit</button>
+          <button id="fullscreen-button" type="button" hidden>Open full screen</button>
+        </div>
       </header>
 
-      <p class="privacy">Your original and reference stay in this editor's browser memory. The local plugin server never receives image files. Only the optional “Ask ChatGPT” action sends a metadata-free PNG preview of the reference image to ChatGPT; the original is not sent.</p>
+      <p class="privacy">The original and reference pixels stay in this browser. Portrait Studio keeps only the source filename, dimensions, byte size, SHA-256, and edit history in its local MCP process so sessions can reconnect; source image bytes are never sent to MCP or ChatGPT. When you press Save edited PNG, only the finished edit is sent to the local process and saved as a new file in Downloads. “Ask ChatGPT” shares a reduced reference preview only after you press it.</p>
 
       <section class="files" aria-label="Images">
         <div class="file-box">
@@ -162,24 +167,37 @@
           <h2>Color</h2>
           <div class="field-grid">
             <div class="field">
-              <label for="color-mode">Starting look</label>
-              <select id="color-mode">
+              <label for="color-preset">Starting look</label>
+              <select id="color-preset">
+                <option value="custom">Custom adjustments</option>
                 <option value="natural">Natural</option>
                 <option value="warm">Warm</option>
                 <option value="cool">Cool</option>
-                <option value="mono">Monochrome</option>
+                <option value="monochrome">Monochrome</option>
               </select>
-              <small>Deterministic browser color filters; the source pixels are not regenerated.</small>
+              <small>Presets set explicit values; they do not regenerate source pixels.</small>
             </div>
             <div class="field">
-              <label for="color-intensity">Intensity</label>
-              <div class="range-line"><input id="color-intensity" type="range" min="0" max="100" value="0"><output id="color-intensity-value" for="color-intensity">0%</output></div>
-              <small>Use a light touch, then compare both previews.</small>
+              <label for="preset-intensity">Preset intensity</label>
+              <div class="range-line"><input id="preset-intensity" type="range" min="0" max="100" value="50"><output id="preset-intensity-value" for="preset-intensity">50%</output></div>
             </div>
           </div>
+          <div class="field-grid" style="margin-top:0.875rem">
+            <div class="field"><label for="adjust-exposureEV">Exposure</label><div class="range-line"><input id="adjust-exposureEV" type="range" min="-5" max="5" step="0.1" value="0"><output id="adjust-exposureEV-value">0.0 EV</output></div></div>
+            <div class="field"><label for="adjust-contrast">Contrast</label><div class="range-line"><input id="adjust-contrast" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-contrast-value">0</output></div></div>
+            <div class="field"><label for="adjust-highlights">Highlights</label><div class="range-line"><input id="adjust-highlights" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-highlights-value">0</output></div></div>
+            <div class="field"><label for="adjust-shadows">Shadows</label><div class="range-line"><input id="adjust-shadows" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-shadows-value">0</output></div></div>
+            <div class="field"><label for="adjust-temperature">Temperature</label><div class="range-line"><input id="adjust-temperature" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-temperature-value">0</output></div><small>Negative is cooler; positive is warmer.</small></div>
+            <div class="field"><label for="adjust-tint">Tint</label><div class="range-line"><input id="adjust-tint" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-tint-value">0</output></div><small>Negative shifts green; positive shifts magenta.</small></div>
+            <div class="field"><label for="adjust-vibrance">Vibrance</label><div class="range-line"><input id="adjust-vibrance" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-vibrance-value">0</output></div></div>
+            <div class="field"><label for="adjust-saturation">Saturation</label><div class="range-line"><input id="adjust-saturation" type="range" min="-100" max="100" step="1" value="0"><output id="adjust-saturation-value">0</output></div></div>
+          </div>
           <div class="actions">
+            <button id="apply-preset" type="button" disabled>Apply look</button>
+            <button id="reset-color" type="button" disabled>Reset color</button>
             <button id="ask-chatgpt" type="button" disabled>Ask ChatGPT for a color suggestion</button>
           </div>
+          <p class="panel-note">Color changes are global and preserve image geometry and texture. The app does not identify or mask skin.</p>
           <p class="panel-note" id="ai-note">Choose a reference image first. ChatGPT suggestions use the reference only and do not change pixels.</p>
         </section>
 
@@ -201,11 +219,12 @@
         <section class="panel" id="panel-crop" role="tabpanel" aria-labelledby="tab-crop" hidden>
           <h2>Crop</h2>
           <p class="panel-note">Set crop edges as percentages of the original. Export keeps the selected crop at its native pixel dimensions.</p>
+          <div class="field" style="max-width:28rem;margin-bottom:0.875rem"><label for="crop-aspect-ratio">Aspect ratio</label><select id="crop-aspect-ratio"><option value="free">Free</option><option value="1:1">1:1</option><option value="4:5">4:5 portrait</option><option value="5:4">5:4</option><option value="3:2">3:2</option><option value="2:3">2:3 portrait</option><option value="16:9">16:9</option><option value="9:16">9:16 portrait</option><option value="3:4">3:4 portrait</option><option value="4:3">4:3</option></select></div>
           <div class="field-grid">
-            <div class="field"><label for="crop-x">Left edge</label><div class="range-line"><input id="crop-x" type="range" min="0" max="95" step="0.1" value="0"><output id="crop-x-value">0%</output></div></div>
-            <div class="field"><label for="crop-y">Top edge</label><div class="range-line"><input id="crop-y" type="range" min="0" max="95" step="0.1" value="0"><output id="crop-y-value">0%</output></div></div>
-            <div class="field"><label for="crop-width">Width</label><div class="range-line"><input id="crop-width" type="range" min="5" max="100" step="0.1" value="100"><output id="crop-width-value">100%</output></div></div>
-            <div class="field"><label for="crop-height">Height</label><div class="range-line"><input id="crop-height" type="range" min="5" max="100" step="0.1" value="100"><output id="crop-height-value">100%</output></div></div>
+            <div class="field"><label for="crop-x">Left edge</label><div class="range-line"><input id="crop-x" type="range" min="0" max="99.9" step="0.1" value="0"><output id="crop-x-value">0%</output></div></div>
+            <div class="field"><label for="crop-y">Top edge</label><div class="range-line"><input id="crop-y" type="range" min="0" max="99.9" step="0.1" value="0"><output id="crop-y-value">0%</output></div></div>
+            <div class="field"><label for="crop-width">Width</label><div class="range-line"><input id="crop-width" type="range" min="0.1" max="100" step="0.1" value="100"><output id="crop-width-value">100%</output></div></div>
+            <div class="field"><label for="crop-height">Height</label><div class="range-line"><input id="crop-height" type="range" min="0.1" max="100" step="0.1" value="100"><output id="crop-height-value">100%</output></div></div>
           </div>
           <div class="actions"><button id="reset-crop" type="button">Reset crop</button></div>
         </section>
@@ -217,8 +236,8 @@
             <div class="metric"><dt>Crop output</dt><dd id="quality-output-size">—</dd></div>
             <div class="metric"><dt>Export</dt><dd>PNG · lossless encoding</dd></div>
           </dl>
-          <p class="panel-note">The preview is reduced only for display. Download exports the cropped edit at its native pixel dimensions with no extra lossy compression. Browser Canvas exports omit source EXIF and use an 8-bit display color pipeline; wide-gamut and 16-bit color fidelity are not verified.</p>
-          <div class="actions"><button class="primary" id="download-png" type="button" disabled>Download full-resolution PNG</button></div>
+          <p class="panel-note">The preview is reduced only for display. Save writes the cropped edit at its native pixel dimensions as a new PNG in Downloads without overwriting an existing file. Browser Canvas exports omit source EXIF and use an 8-bit display color pipeline; wide-gamut and 16-bit color fidelity are not verified.</p>
+          <div class="actions"><button class="primary" id="download-png" type="button" disabled>Save edited PNG to Downloads</button></div>
         </section>
       </section>
 
@@ -236,28 +255,47 @@
       const beforeCanvas = byId('before-canvas');
       const afterCanvas = byId('after-canvas');
       const referenceCanvas = byId('reference-canvas');
+      function createUuid() {
+        const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+        return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+      }
       const state = {
+        sessionId: null,
+        revision: -1,
+        rendererId: createUuid(),
+        hostCapabilities: {},
+        sourceHash: null,
+        sourceMetadata: null,
+        renderedRevision: null,
+        renderGeneration: 0,
+        rendering: null,
+        syncingFromChat: false,
         sourceFile: null,
         sourceBitmap: null,
         referenceFile: null,
         referenceBitmap: null,
-        crop: { x: 0, y: 0, width: 100, height: 100 },
-        colorMode: 'natural',
-        intensity: 0,
+        crop: { x: 0, y: 0, width: 100, height: 100, aspectRatio: 'free' },
+        adjustments: { ...Engine.DEFAULT_ADJUSTMENTS },
+        preset: null,
         cloneSource: null,
         choosingCloneSource: false,
         strokes: [],
         drawingStroke: null
       };
 
-      let bridgeReady = Promise.resolve();
+      let bridgeReady = Promise.resolve(null);
+      let callTool;
+      let sendRequest;
       if (window.parent !== window) {
         let rpcId = 0;
         const pending = new Map();
         const sendNotification = (method, params) => {
           window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
         };
-        const sendRequest = (method, params) => new Promise((resolve, reject) => {
+        sendRequest = (method, params) => new Promise((resolve, reject) => {
           const id = ++rpcId;
           const timeout = setTimeout(() => {
             pending.delete(id);
@@ -269,9 +307,16 @@
           });
           window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
         });
+        callTool = (name, args) => sendRequest('tools/call', { name, arguments: args });
         window.addEventListener('message', (event) => {
           if (event.source !== window.parent || !event.data || event.data.jsonrpc !== '2.0')
             return;
+          if (event.data.method === 'ui/notifications/tool-result') {
+            const result = event.data.params?.structuredContent;
+            if (isStateSnapshot(result))
+              void applySnapshot(result, true, null, event.data.params?.toolName).catch((error) => setStatus(error instanceof Error ? error.message : 'The chat update could not be synchronized.', 'error'));
+            return;
+          }
           if (event.data.method === 'ui/notifications/tool-input')
             return;
           const waiter = pending.get(event.data.id);
@@ -284,16 +329,278 @@
             waiter.resolve(event.data.result);
         });
         bridgeReady = sendRequest('ui/initialize', {
-          appInfo: { name: 'portrait-studio-for-chatgpt', version: '0.2.2' },
+          appInfo: { name: 'portrait-studio-for-chatgpt', version: '0.2.7' },
           appCapabilities: {},
           protocolVersion: '2026-01-26'
-        }).then(() => sendNotification('ui/notifications/initialized', {}));
+        }).then((initialized) => {
+          state.hostCapabilities = initialized?.hostCapabilities || {};
+          sendNotification('ui/notifications/initialized', {});
+          return initialized;
+        });
         bridgeReady.catch(() => setStatus('The editor is open, but the ChatGPT app bridge did not initialize.', 'error'));
+        bridgeReady.then(async () => {
+          const sessionId = window.openai?.widgetState?.sessionId;
+          if (!sessionId)
+            return;
+          try {
+            const result = await callTool('get_editor_state', { sessionId });
+            if (isStateSnapshot(result?.structuredContent))
+              await applySnapshot(result.structuredContent);
+          } catch {
+            setStatus('The previous edit session could not be restored. Open Portrait Studio to start a new session.', 'error');
+          }
+        });
       }
 
       function setStatus(message, kind = 'info') {
         status.textContent = message;
         status.dataset.kind = kind;
+      }
+
+      function isStateSnapshot(value) {
+        return value && typeof value === 'object' && typeof value.sessionId === 'string' && Number.isInteger(value.revision) &&
+          value.adjustments && value.crop && value.preview && value.export && Array.isArray(value.errors);
+      }
+
+      async function sha256(bytes) {
+        const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+      }
+
+      function rememberWidgetState() {
+        window.openai?.setWidgetState?.({ sessionId: state.sessionId, revision: state.revision, rendererId: state.rendererId });
+      }
+
+      async function updateModelContext() {
+        if (!state.hostCapabilities.updateModelContext || !state.sessionId || state.revision < 0)
+          return;
+        const source = state.sourceMetadata
+          ? `${state.sourceMetadata.fileName}, ${state.sourceMetadata.width} × ${state.sourceMetadata.height} px, SHA-256 ${state.sourceMetadata.sha256}`
+          : 'no source selected';
+        const preview = state.renderedRevision === state.revision && state.preview?.status === 'confirmed' &&
+          state.preview.revision === state.revision && state.preview.rendererId === state.rendererId ? 'After preview confirmed' : 'After preview pending';
+        const text = `Portrait Studio session ${state.sessionId}, revision ${state.revision}; source ${source}; color ${JSON.stringify(state.adjustments)}; crop ${JSON.stringify(state.crop)}; ${preview}. Image bytes remain local to the editor.`;
+        try {
+          await sendRequest('ui/update-model-context', { content: [{ type: 'text', text }] });
+        } catch {
+          // Hosts without the optional context update still expose state through get_editor_state.
+        }
+      }
+
+      function syncControls() {
+        const canEdit = !!(state.sourceBitmap && state.sessionId && callTool);
+        for (const [key, value] of Object.entries(state.adjustments)) {
+          const input = byId('adjust-' + key);
+          input.value = value;
+          byId('adjust-' + key + '-value').textContent = key === 'exposureEV' ? Number(value).toFixed(1) + ' EV' : String(value);
+        }
+        byId('color-preset').value = state.preset?.name || 'custom';
+        byId('preset-intensity').value = state.preset?.intensity ?? 50;
+        byId('preset-intensity-value').textContent = (state.preset?.intensity ?? 50) + '%';
+        for (const key of ['x', 'y', 'width', 'height']) {
+          const input = byId('crop-' + key);
+          input.value = state.crop[key];
+          byId('crop-' + key + '-value').textContent = state.crop[key] + '%';
+        }
+        byId('crop-aspect-ratio').value = state.crop.aspectRatio;
+        if (state.sourceMetadata) {
+          byId('crop-width').max = Math.max(Number(byId('crop-width').min), 100 - state.crop.x);
+          byId('crop-height').max = Math.max(Number(byId('crop-height').min), 100 - state.crop.y);
+        }
+        byId('undo-edit').disabled = !state.history?.canUndo;
+        byId('redo-edit').disabled = !state.history?.canRedo;
+        byId('sync-from-chat').disabled = !state.sessionId || !callTool || state.syncingFromChat;
+        byId('sync-from-chat').textContent = state.syncingFromChat ? 'Syncing…' : 'Sync from Chat';
+        for (const input of Object.keys(Engine.DEFAULT_ADJUSTMENTS))
+          byId('adjust-' + input).disabled = !canEdit;
+        for (const key of ['x', 'y', 'width', 'height'])
+          byId('crop-' + key).disabled = !canEdit;
+        byId('crop-aspect-ratio').disabled = !canEdit;
+        byId('color-preset').disabled = !canEdit;
+        byId('preset-intensity').disabled = !canEdit;
+        byId('apply-preset').disabled = !canEdit || byId('color-preset').value === 'custom';
+        byId('reset-color').disabled = !canEdit;
+        byId('reset-crop').disabled = !canEdit;
+        byId('download-png').disabled = !canEdit || state.renderedRevision !== state.revision ||
+          state.preview?.status !== 'confirmed' || state.preview.revision !== state.revision || state.preview.rendererId !== state.rendererId;
+      }
+
+      function clearSelectedSource() {
+        state.renderGeneration++;
+        state.rendering = null;
+        state.sourceBitmap?.close();
+        state.sourceBitmap = null;
+        state.sourceFile = null;
+        state.sourceHash = null;
+        state.sourceMetadata = null;
+        state.cloneSource = null;
+        state.strokes = [];
+        state.drawingStroke = null;
+        state.renderedRevision = null;
+        byId('original-name').textContent = 'No image selected';
+        byId('set-clone-source').disabled = true;
+        byId('undo-stroke').disabled = true;
+        byId('clear-strokes').disabled = true;
+        syncControls();
+      }
+
+      async function applySnapshot(snapshot, fromHost = false, expectedSessionId = null, toolName = null) {
+        if (!isStateSnapshot(snapshot))
+          return false;
+        if (expectedSessionId && snapshot.sessionId !== expectedSessionId)
+          return false;
+        const previousRevision = state.revision;
+        if (state.sessionId && state.sessionId !== snapshot.sessionId && (fromHost || state.sourceBitmap)) {
+          if (fromHost)
+            setStatus('That chat command targets another editor session. The current image was left untouched.', 'info');
+          return false;
+        }
+        if (state.sessionId === snapshot.sessionId && snapshot.revision < state.revision)
+          return false;
+        if (fromHost && toolName !== 'open_portrait_studio' && state.sessionId === snapshot.sessionId &&
+            snapshot.revision === state.revision && state.renderedRevision === state.revision &&
+            state.preview?.status === 'confirmed' && state.preview.rendererId === state.rendererId &&
+            snapshot.preview?.status !== 'confirmed')
+          return false;
+        if (state.sessionId !== snapshot.sessionId)
+          clearSelectedSource();
+        state.sessionId = snapshot.sessionId;
+        state.revision = snapshot.revision;
+        state.sourceMetadata = snapshot.source;
+        state.adjustments = { ...Engine.DEFAULT_ADJUSTMENTS, ...snapshot.adjustments };
+        state.preset = snapshot.preset;
+        state.crop = { ...snapshot.crop };
+        state.history = snapshot.history;
+        state.preview = snapshot.preview;
+        state.export = snapshot.export;
+        rememberWidgetState();
+        syncControls();
+        if (!snapshot.ok) {
+          setStatus(snapshot.errors?.[0]?.message || 'Portrait Studio could not apply that action.', 'error');
+          if (state.sourceBitmap && previousRevision !== state.revision) {
+            try {
+              await renderPreview();
+            } catch (error) {
+              setStatus(error instanceof Error ? error.message : 'The After preview could not be rendered.', 'error');
+            }
+          }
+          return false;
+        }
+        if (state.sourceBitmap && snapshot.source?.sha256 !== state.sourceHash) {
+          clearSelectedSource();
+          originalInput.value = '';
+        }
+        if (state.sourceBitmap && (state.renderedRevision !== state.revision || snapshot.preview?.status !== 'confirmed' ||
+            snapshot.preview.revision !== state.revision || snapshot.preview.rendererId !== state.rendererId)) {
+          const activeRender = state.rendering;
+          if (snapshot.preview?.status === 'confirmed' && snapshot.preview.revision === state.revision &&
+              snapshot.preview.rendererId === state.rendererId && activeRender?.revision === state.revision &&
+              activeRender.sourceHash === state.sourceHash && activeRender.previewSha256 === snapshot.preview.sha256) {
+            state.renderedRevision = state.revision;
+            byId('download-png').disabled = false;
+            void updateModelContext();
+          } else {
+            try {
+              const confirmed = await renderPreview();
+              if (fromHost && confirmed)
+                setStatus(`Chat edit synchronized at revision ${state.revision}.`, 'success');
+            } catch (error) {
+              setStatus(error instanceof Error ? error.message : 'The After preview could not be rendered.', 'error');
+            }
+          }
+        } else if (snapshot.source && !state.sourceBitmap) {
+          setStatus('Session restored. Reselect the exact source file to resume; its SHA-256 will be checked locally.', 'info');
+          setCanvasEmpty(beforeCanvas, 'before-empty', true);
+          setCanvasEmpty(afterCanvas, 'after-empty', true);
+        } else if (!snapshot.source) {
+          setStatus('Session ready. Choose a JPEG or PNG to begin.', 'info');
+        }
+        return true;
+      }
+
+      async function callEditorTool(name, args) {
+        if (!callTool)
+          throw new Error('Portrait Studio actions are available only in a supported MCP Apps host.');
+        await bridgeReady;
+        const result = await callTool(name, args);
+        if (isStateSnapshot(result?.structuredContent)) {
+          await applySnapshot(result.structuredContent, false, typeof args.sessionId === 'string' ? args.sessionId : null);
+          if (result.isError || !result.structuredContent.ok)
+            throw new Error(result.content?.find((item) => item.type === 'text')?.text || result.structuredContent.errors?.[0]?.message || 'The editor action was rejected.');
+        } else if (result?.isError) {
+          throw new Error(result.content?.find((item) => item.type === 'text')?.text || 'The editor action failed.');
+        }
+        return result;
+      }
+
+      async function syncFromChat() {
+        if (!state.sessionId || !callTool || state.syncingFromChat)
+          return;
+        const sessionId = state.sessionId;
+        const previousRevision = state.revision;
+        state.syncingFromChat = true;
+        syncControls();
+        setStatus('Reading the latest chat state…');
+        try {
+          const result = await callEditorTool('get_editor_state', { sessionId });
+          const latest = result?.structuredContent;
+          if (!isStateSnapshot(latest) || latest.sessionId !== sessionId || state.sessionId !== sessionId) {
+            setStatus('Sync stopped because the active editor session changed.', 'error');
+            return;
+          }
+          if (latest.revision < previousRevision) {
+            setStatus(`Ignored stale chat state at revision ${latest.revision}; the editor remains at revision ${state.revision}.`, 'error');
+            return;
+          }
+          if (!latest.source) {
+            setStatus(`Chat state at revision ${latest.revision} has no source image.`, 'info');
+            return;
+          }
+          if (!state.sourceBitmap || !state.sourceHash || state.sourceHash !== latest.source.sha256) {
+            setStatus('Chat state received. Reselect the exact source image to render it; its SHA-256 must match.', 'info');
+            return;
+          }
+          if (state.revision !== latest.revision || state.renderedRevision !== latest.revision ||
+              state.preview?.status !== 'confirmed' || state.preview.rendererId !== state.rendererId) {
+            if (!await renderPreview()) {
+              setStatus(`Chat state reached revision ${latest.revision}, but the After preview is not confirmed.`, 'error');
+              return;
+            }
+          }
+          if (state.revision === latest.revision && state.renderedRevision === latest.revision &&
+              state.preview?.status === 'confirmed' && state.preview.revision === latest.revision &&
+              state.preview.rendererId === state.rendererId) {
+            const diagnosticResult = await callEditorTool('get_runtime_diagnostics', { sessionId });
+            const diagnostic = diagnosticResult?.structuredContent;
+            const diagnosticPreview = diagnostic?.session?.preview;
+            const confirmedBy = diagnosticPreview?.confirmedBy;
+            const renderedBy = state.preview?.confirmedBy;
+            if (!diagnostic || state.sessionId !== sessionId || state.revision !== latest.revision ||
+                diagnostic.sessionStorePath !== confirmedBy?.sessionStorePath ||
+                diagnostic.serverVersion !== confirmedBy?.serverVersion || diagnostic.sourceBuildHash !== confirmedBy?.sourceBuildHash ||
+                diagnostic.session?.revision !== latest.revision || diagnosticPreview?.status !== 'confirmed' ||
+                diagnosticPreview.revision !== latest.revision || diagnosticPreview.rendererId !== state.rendererId ||
+                diagnosticPreview.sha256 !== state.preview.sha256 || !confirmedBy || !renderedBy ||
+                diagnosticPreview.confirmedBy.instanceId !== renderedBy.instanceId ||
+                diagnosticPreview.confirmedBy.sourceBuildHash !== renderedBy.sourceBuildHash ||
+                diagnosticPreview.confirmedBy.sessionStorePath !== renderedBy.sessionStorePath) {
+              setStatus(`Preview at revision ${latest.revision} is confirmed, but runtime provenance could not be matched.`, 'error');
+              return;
+            }
+            const traceMatched = diagnostic.confirmationEvents?.some((event) => event.result === 'confirmed' &&
+              event.expectedRevision === latest.revision && event.rendererId === state.rendererId &&
+              event.instanceId === confirmedBy.instanceId) === true;
+            const provenance = `runtime PID ${diagnostic.pid} instance ${diagnostic.instanceId} build ${diagnostic.sourceBuildHash}; confirmed by PID ${confirmedBy.pid} instance ${confirmedBy.instanceId} build ${confirmedBy.sourceBuildHash}`;
+            setStatus(`Synced from Chat at revision ${latest.revision}; ${provenance}; ${traceMatched ? 'confirmation trace matched' : 'confirmation came from another process instance'}.`, 'success');
+          } else {
+            setStatus('The editor changed during sync. Sync again before continuing.', 'error');
+          }
+        } catch (error) {
+          setStatus(error instanceof Error ? `Sync from Chat failed: ${error.message}` : 'Sync from Chat failed.', 'error');
+        } finally {
+          state.syncingFromChat = false;
+          syncControls();
+        }
       }
 
       function setCanvasEmpty(canvas, emptyId, isEmpty) {
@@ -321,18 +628,11 @@
           throw new Error('Canvas unavailable');
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = 'high';
-        context.filter = color ? Engine.colorFilter(state.colorMode, state.intensity) : 'none';
         context.drawImage(state.sourceBitmap, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height);
-        context.filter = 'none';
-        if (!color)
-          return;
-        const overlay = Engine.colorOverlay(state.colorMode, state.intensity);
-        if (overlay && overlay.alpha > 0) {
-          context.save();
-          context.globalCompositeOperation = 'soft-light';
-          context.fillStyle = 'rgba(' + overlay.color + ', ' + overlay.alpha + ')';
-          context.fillRect(0, 0, width, height);
-          context.restore();
+        if (color) {
+          const image = context.getImageData(0, 0, width, height);
+          Engine.applyColorAdjustments(image.data, state.adjustments);
+          context.putImageData(image, 0, 0);
         }
       }
 
@@ -368,23 +668,73 @@
         byId('after-dimensions').textContent = outputWidth.toLocaleString() + ' × ' + outputHeight.toLocaleString();
       }
 
-      function renderPreview() {
+      async function renderPreview(confirm = true) {
         if (!state.sourceBitmap) {
           setCanvasEmpty(beforeCanvas, 'before-empty', true);
           setCanvasEmpty(afterCanvas, 'after-empty', true);
           byId('download-png').disabled = true;
-          return;
+          return false;
         }
-        const crop = currentCropPixels();
-        const scale = Math.min(1, Engine.MAX_PREVIEW_EDGE / Math.max(crop.width, crop.height));
-        drawImageCrop(beforeCanvas, crop, scale, false);
-        drawImageCrop(afterCanvas, crop, scale, true);
-        paintCloneStrokes(afterCanvas, crop, scale);
-        setCanvasEmpty(beforeCanvas, 'before-empty', false);
-        setCanvasEmpty(afterCanvas, 'after-empty', false);
-        byId('download-png').disabled = false;
-        byId('set-clone-source').disabled = false;
-        syncQuality(crop);
+        const revision = state.revision;
+        if (confirm && state.rendering?.revision === revision)
+          return state.rendering.promise;
+        const sessionId = state.sessionId;
+        const sourceHash = state.sourceHash;
+        let currentRender = null;
+        const render = (async () => {
+          const generation = ++state.renderGeneration;
+          const crop = currentCropPixels();
+          const scale = Math.min(1, Engine.MAX_PREVIEW_EDGE / Math.max(crop.width, crop.height));
+          drawImageCrop(beforeCanvas, crop, scale, false);
+          drawImageCrop(afterCanvas, crop, scale, true);
+          paintCloneStrokes(afterCanvas, crop, scale);
+          setCanvasEmpty(beforeCanvas, 'before-empty', false);
+          setCanvasEmpty(afterCanvas, 'after-empty', false);
+          state.renderedRevision = null;
+          byId('download-png').disabled = true;
+          byId('set-clone-source').disabled = false;
+          syncQuality(crop);
+          if (!confirm || !callTool || !sessionId || !sourceHash || state.sourceMetadata?.sha256 !== sourceHash) {
+            syncControls();
+            return false;
+          }
+          const pixels = afterCanvas.getContext('2d').getImageData(0, 0, afterCanvas.width, afterCanvas.height);
+          const previewHash = await sha256(pixels.data.buffer);
+          if (generation !== state.renderGeneration || sessionId !== state.sessionId || revision !== state.revision || sourceHash !== state.sourceHash)
+            return false;
+          currentRender.previewSha256 = previewHash;
+          const result = await callEditorTool('confirm_preview', {
+            sessionId,
+            expectedRevision: revision,
+            rendererId: state.rendererId,
+            sourceSha256: sourceHash,
+            width: afterCanvas.width,
+            height: afterCanvas.height,
+            sha256: previewHash
+          });
+          const confirmed = result?.structuredContent;
+          if (generation !== state.renderGeneration || sessionId !== state.sessionId || revision !== state.revision ||
+              sourceHash !== state.sourceHash || confirmed?.sessionId !== sessionId || confirmed.source?.sha256 !== sourceHash ||
+              confirmed.preview?.status !== 'confirmed' || confirmed.preview.revision !== revision ||
+              confirmed.preview.sha256 !== previewHash || confirmed.preview.rendererId !== state.rendererId)
+            return false;
+          state.renderedRevision = revision;
+          state.preview = confirmed.preview;
+          byId('download-png').disabled = false;
+          syncControls();
+          void updateModelContext();
+          return true;
+        })();
+        if (!confirm)
+          return render;
+        currentRender = { revision, sourceHash, previewSha256: null, promise: render };
+        state.rendering = currentRender;
+        try {
+          return await render;
+        } finally {
+          if (state.rendering === currentRender)
+            state.rendering = null;
+        }
       }
 
       function validateFile(file) {
@@ -419,18 +769,39 @@
           return;
         try {
           const bitmap = await decodeFile(file);
+          const sourceHash = await sha256(await file.arrayBuffer());
+          if (callTool) {
+            await bridgeReady;
+            if (state.sourceMetadata && state.sourceMetadata.sha256 !== sourceHash) {
+              clearSelectedSource();
+              state.sessionId = null;
+              state.revision = -1;
+            }
+            if (!state.sessionId) {
+              const opened = await callTool('open_portrait_studio', {});
+              if (!isStateSnapshot(opened?.structuredContent))
+                throw new Error(opened?.content?.find((item) => item.type === 'text')?.text || 'A local edit session could not be opened.');
+              await applySnapshot(opened.structuredContent);
+            }
+          }
           state.sourceBitmap?.close();
           state.sourceBitmap = bitmap;
           state.sourceFile = file;
-          state.crop = { x: 0, y: 0, width: 100, height: 100 };
+          state.sourceHash = sourceHash;
           state.cloneSource = null;
           state.choosingCloneSource = false;
           state.strokes = [];
-          for (const key of ['x', 'y', 'width', 'height'])
-            byId('crop-' + key).value = state.crop[key];
           byId('original-name').textContent = file.name;
-          renderPreview();
-          setStatus('Image ready. Changes are previewed separately; the original file is unchanged.', 'success');
+          if (callTool) {
+            await callEditorTool('set_active_image', {
+              sessionId: state.sessionId,
+              expectedRevision: state.revision,
+              source: { fileName: file.name, mimeType: file.type, width: bitmap.width, height: bitmap.height, byteSize: file.size, sha256: sourceHash }
+            });
+          } else {
+            renderPreview(false);
+          }
+          setStatus('Image ready. Changes are rendered separately; the original file is unchanged.', 'success');
         } catch (error) {
           originalInput.value = '';
           setStatus(error instanceof TypeError || error instanceof RangeError ? error.message : 'This JPEG or PNG could not be decoded. The source file was not changed.', 'error');
@@ -456,48 +827,109 @@
         }
       });
 
-      byId('color-mode').addEventListener('change', (event) => {
-        state.colorMode = event.target.value;
-        renderPreview();
-      });
-
-      byId('color-intensity').addEventListener('input', (event) => {
-        state.intensity = Number(event.target.value);
-        byId('color-intensity-value').textContent = state.intensity + '%';
-        renderPreview();
-      });
-
       const cropKeys = ['x', 'y', 'width', 'height'];
-      function readCropControls() {
-        state.crop = Engine.normalizeCrop({
+      function cropFromControls() {
+        return Engine.normalizeCrop({
           x: byId('crop-x').value,
           y: byId('crop-y').value,
           width: byId('crop-width').value,
-          height: byId('crop-height').value
-        });
+          height: byId('crop-height').value,
+          aspectRatio: byId('crop-aspect-ratio').value
+        }, state.sourceBitmap.width, state.sourceBitmap.height);
+      }
+
+      function showCropControls(crop) {
         for (const key of cropKeys) {
           const input = byId('crop-' + key);
-          input.value = state.crop[key];
-          byId('crop-' + key + '-value').textContent = state.crop[key] + '%';
+          input.value = crop[key];
+          byId('crop-' + key + '-value').textContent = crop[key] + '%';
         }
-        byId('crop-width').max = 100 - state.crop.x;
-        byId('crop-height').max = 100 - state.crop.y;
+        byId('crop-aspect-ratio').value = crop.aspectRatio;
+        byId('crop-width').max = 100 - crop.x;
+        byId('crop-height').max = 100 - crop.y;
       }
 
       for (const key of cropKeys) {
-        byId('crop-' + key).addEventListener('input', () => {
-          readCropControls();
-          renderPreview();
+        byId('crop-' + key).addEventListener('input', (event) => {
+          byId('crop-' + key + '-value').textContent = event.target.value + '%';
+        });
+        byId('crop-' + key).addEventListener('change', () => {
+          void commitCrop();
         });
       }
 
-      byId('reset-crop').addEventListener('click', () => {
-        state.crop = { x: 0, y: 0, width: 100, height: 100 };
-        for (const key of cropKeys)
-          byId('crop-' + key).value = state.crop[key];
-        readCropControls();
-        renderPreview();
+      async function commitCrop(patch = null) {
+        try {
+          await callEditorTool('set_crop', {
+            sessionId: state.sessionId,
+            expectedRevision: state.revision,
+            crop: patch || cropFromControls()
+          });
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : 'Crop was not applied.', 'error');
+        }
+      }
+
+      byId('crop-aspect-ratio').addEventListener('change', (event) => {
+        void commitCrop({ aspectRatio: event.target.value });
       });
+
+      byId('reset-crop').addEventListener('click', () => {
+        void commitCrop({ x: 0, y: 0, width: 100, height: 100, aspectRatio: 'free' });
+      });
+
+      for (const key of Object.keys(Engine.DEFAULT_ADJUSTMENTS)) {
+        byId('adjust-' + key).addEventListener('input', (event) => {
+          byId('adjust-' + key + '-value').textContent = key === 'exposureEV' ? Number(event.target.value).toFixed(1) + ' EV' : event.target.value;
+        });
+        byId('adjust-' + key).addEventListener('change', async (event) => {
+          try {
+            await callEditorTool('set_color_adjustments', {
+              sessionId: state.sessionId,
+              expectedRevision: state.revision,
+              adjustments: { [key]: Number(event.target.value) }
+            });
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : 'Color adjustment was not applied.', 'error');
+          }
+        });
+      }
+
+      byId('preset-intensity').addEventListener('input', (event) => {
+        byId('preset-intensity-value').textContent = event.target.value + '%';
+      });
+      byId('color-preset').addEventListener('change', (event) => {
+        byId('apply-preset').disabled = !state.sourceBitmap || event.target.value === 'custom';
+      });
+      byId('apply-preset').addEventListener('click', async () => {
+        try {
+          await callEditorTool('apply_color_preset', {
+            sessionId: state.sessionId,
+            expectedRevision: state.revision,
+            preset: byId('color-preset').value,
+            intensity: Number(byId('preset-intensity').value)
+          });
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : 'Color look was not applied.', 'error');
+        }
+      });
+      byId('reset-color').addEventListener('click', async () => {
+        try {
+          await callEditorTool('reset_adjustments', { sessionId: state.sessionId, expectedRevision: state.revision, fields: ['color'] });
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : 'Color settings were not reset.', 'error');
+        }
+      });
+      byId('undo-edit').addEventListener('click', () => void runHistoryAction('undo_edit'));
+      byId('redo-edit').addEventListener('click', () => void runHistoryAction('redo_edit'));
+      byId('sync-from-chat').addEventListener('click', () => void syncFromChat());
+      async function runHistoryAction(name) {
+        try {
+          await callEditorTool(name, { sessionId: state.sessionId, expectedRevision: state.revision });
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : 'Edit history action failed.', 'error');
+        }
+      }
 
       byId('brush-size').addEventListener('input', (event) => {
         byId('brush-size-value').textContent = event.target.value + ' px';
@@ -544,7 +976,7 @@
         state.strokes.push(stroke);
         state.drawingStroke = stroke;
         afterCanvas.setPointerCapture(event.pointerId);
-        renderPreview();
+        void renderPreview(false);
         byId('undo-stroke').disabled = false;
         byId('clear-strokes').disabled = false;
       });
@@ -557,11 +989,13 @@
         if (Math.hypot(point.x - last.x, point.y - last.y) < Math.max(1, state.drawingStroke.radius / 4))
           return;
         state.drawingStroke.points.push(point);
-        renderPreview();
+        void renderPreview(false);
       });
 
       function stopDrawing() {
         state.drawingStroke = null;
+        if (state.strokes.length)
+          void renderPreview();
       }
       afterCanvas.addEventListener('pointerup', stopDrawing);
       afterCanvas.addEventListener('pointercancel', stopDrawing);
@@ -590,6 +1024,22 @@
       function canvasBlob(canvas) {
         return new Promise((resolve, reject) => {
           canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG export failed')), 'image/png');
+        });
+      }
+
+      function blobBase64(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error('The PNG could not be prepared for local saving.'));
+          reader.onload = () => {
+            const dataUrl = String(reader.result);
+            const comma = dataUrl.indexOf(',');
+            if (comma < 0)
+              reject(new Error('The PNG could not be prepared for local saving.'));
+            else
+              resolve(dataUrl.slice(comma + 1));
+          };
+          reader.readAsDataURL(blob);
         });
       }
 
@@ -631,31 +1081,46 @@
       byId('ask-chatgpt').addEventListener('click', askChatGPT);
 
       byId('download-png').addEventListener('click', async () => {
-        if (!state.sourceBitmap)
+        if (!state.sourceBitmap || state.renderedRevision !== state.revision)
           return;
         const button = byId('download-png');
         button.disabled = true;
-        button.textContent = 'Preparing PNG…';
+        button.textContent = 'Saving PNG locally…';
         try {
+          if (!callTool)
+            throw new Error('Local saving is available only in the Portrait Studio app.');
+          await bridgeReady;
           const crop = currentCropPixels();
+          if (state.renderedRevision !== state.revision || state.preview?.status !== 'confirmed')
+            throw new Error('The current After preview is not confirmed yet. Wait for it to finish rendering.');
           const output = makeCanvas(crop.width, crop.height);
           drawImageCrop(output, crop, 1, true);
           paintCloneStrokes(output, crop, 1);
+          const outputPixels = output.getContext('2d').getImageData(0, 0, output.width, output.height);
+          const outputPixelHash = await sha256(outputPixels.data.buffer);
           const blob = await canvasBlob(output);
           const baseName = (state.sourceFile.name || 'portrait').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80) || 'portrait';
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = baseName + '-portrait-studio.png';
-          document.body.append(link);
-          link.click();
-          link.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 60000);
-          setStatus('PNG downloaded at ' + crop.width.toLocaleString() + ' × ' + crop.height.toLocaleString() + ' px. The source file was left unchanged.', 'success');
-        } catch {
-          setStatus('PNG export failed. The original image was left unchanged.', 'error');
+          const result = await callTool('save_edited_png', {
+            baseName,
+            width: crop.width,
+            height: crop.height,
+            pngBase64: await blobBase64(blob),
+            sessionId: state.sessionId,
+            revision: state.revision,
+            rendererId: state.rendererId
+          });
+          if (result?.isError)
+            throw new Error(result.content?.find((item) => item.type === 'text')?.text || 'Local PNG save failed.');
+          const saved = result?.structuredContent;
+          if (!saved?.saved || saved.sessionId !== state.sessionId || saved.revision !== state.revision ||
+              saved.width !== crop.width || saved.height !== crop.height || saved.bytes !== blob.size || !saved.path ||
+              !/^[a-f0-9]{64}$/i.test(saved.pixelSha256 || '') || saved.pixelSha256 !== outputPixelHash)
+            throw new Error('The local save could not be verified. No success was reported.');
+          setStatus('Saved PNG to ' + saved.path + ' (' + crop.width.toLocaleString() + ' × ' + crop.height.toLocaleString() + ' px). The source file was left unchanged.', 'success');
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : 'PNG export failed. The original image was left unchanged.', 'error');
         } finally {
-          button.textContent = 'Download full-resolution PNG';
+          button.textContent = 'Save edited PNG to Downloads';
           button.disabled = !state.sourceBitmap;
         }
       });
@@ -684,8 +1149,9 @@
       if (window.openai?.uploadFile && window.openai?.sendFollowUpMessage) {
         byId('ai-note').textContent = 'Ask ChatGPT sends a metadata-free PNG preview of the reference only. It will suggest values in the conversation; you choose whether to apply them.';
       }
-      readCropControls();
+      syncControls();
       renderPreview();
     </script>
   </body>
 </html>
+

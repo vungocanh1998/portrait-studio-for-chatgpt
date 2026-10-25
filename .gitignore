@@ -1,5 +1,6 @@
 .env
 .env.*
+.mcp.local.json
 !.env.example
 node_modules/
 dist/
@@ -25,3 +26,11 @@ dist/
 *.look
 Thumbs.db
 .DS_Store
+
+# Local runtime state, logs, and generated output
+.portrait-studio-for-chatgpt/
+sessions.json
+*.log
+logs/
+artifacts/
+Downloads/

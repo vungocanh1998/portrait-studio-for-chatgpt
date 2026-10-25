@@ -2,20 +2,33 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "serialNumber": "urn:uuid:8c6418dd-aab4-4a2e-a4ef-43bd5f3a6b14",
-  "version": 1,
+  "version": 2,
   "metadata": {
     "component": {
       "type": "application",
       "name": "Portrait Studio for ChatGPT",
-      "version": "0.2.2",
+      "version": "0.2.8",
       "licenses": [
-        { "license": { "id": "MIT" } }
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
       ]
     },
     "properties": [
-      { "name": "required-host", "value": "ChatGPT Desktop local stdio MCP host with Node.js" },
-      { "name": "bundled-third-party-components", "value": "none" },
-      { "name": "host-runtime-redistributed", "value": "false" }
+      {
+        "name": "required-host",
+        "value": "ChatGPT Desktop local stdio MCP host with Node.js"
+      },
+      {
+        "name": "bundled-third-party-components",
+        "value": "none"
+      },
+      {
+        "name": "host-runtime-redistributed",
+        "value": "false"
+      }
     ]
   },
   "components": []
