@@ -1,5 +1,8 @@
 # Architecture and supported platform
 
+Current architecture: V0.2.8, the accepted local-first baseline. The milestone plan is documented in MASTER_ROADMAP.md; every M1–M8 feature remains planned until separately implemented and accepted.
+
+
 ## MCP tools and editor UI
 
 The existing plugin source keeps one local stdio MCP server and one MCP App resource at `ui://portrait-studio-for-chatgpt/studio-chat-control.html`. The server publishes chat-facing actions for opening/listing a session, reading state, setting color values or a preset, cropping, resetting, undoing/redoing, and checking export status. The UI-only actions register the selected image metadata, confirm a rendered preview, and save an edited PNG; they are marked app-only in tool metadata.
@@ -34,3 +37,8 @@ The canvas path uses the browser's 8-bit display color pipeline and does not pre
 ## Dependencies
 
 The MCP process uses Node.js built-ins. The editor uses browser-standard Canvas, File, and Blob APIs. No new runtime dependency or hosted image service is required.
+
+
+## Roadmap boundary
+
+V0.2.8 uses the local MCP server, browser Canvas editor, deterministic global color controls, crop, manual clone brush, edit history, preview confirmation, and verified PNG export described above. M1 extends the current color/crop session state and history into a shared layer and mask engine. Expanded color and quality studios, guided retouch, lighting, composition tools, and Remote MCP are planned in the master roadmap, not current functionality. No empty future engine directories are part of this repository structure.

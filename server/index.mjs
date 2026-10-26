@@ -534,7 +534,7 @@ function handle(message) {
         },
         serverInfo: {
           name: 'portrait-studio-for-chatgpt',
-          version: '0.2.7'
+          version: '0.2.8'
         },
         instructions: 'For portrait edit requests, use the existing Portrait Studio session. If no session is known in this conversation, call list_editor_sessions and resume the user-selected session, or call open_portrait_studio to create one. Inspect get_editor_state before each edit and pass its exact sessionId and expectedRevision. Translate natural-language deltas into explicit numeric values using the inspected current state; exposure is EV and other color settings are -100 to +100. Use set_crop, apply_color_preset, reset_adjustments, undo_edit, or redo_edit as requested. Treat an edit tool result as accepted parameters only: the preview is pending until the UI renderer confirms it. If the revision advances without confirmation, tell the user to press Sync from Chat in the editor; do not stack edits or save until the latest preview is confirmed. Global color changes do not selectively protect skin, and automatic face edits/healing are unsupported. Source and reference image bytes stay in the browser; the local MCP process persists only source metadata and edit history. A remounted editor asks the user to reselect the exact source, verified by SHA-256. The local plugin is available only in supported ChatGPT Desktop local threads; ordinary ChatGPT conversations require a separately deployed Remote MCP server, which this project has not deployed.'
       });
