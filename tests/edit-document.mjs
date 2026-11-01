@@ -211,6 +211,54 @@ try {
   assert.equal(atLimit.document.history.length, 50, 'history remains capped at the V1 limit');
   assert.equal(atLimit.document.historyIndex, 49);
 
+  // Real V1 fixed-ratio writer math is not necessarily idempotent after
+  // rounding its stored percentage coordinates to four decimals.
+  const writerCrop = Engine.normalizeCrop(
+    { x: 10, y: 0, width: 80, height: 100, aspectRatio: '4:5' }, 301, 201
+  );
+  assert.deepEqual(writerCrop, {
+    x: 23.289, y: 0, width: 53.4219, height: 100, aspectRatio: '4:5'
+  });
+  assert.notDeepEqual(Engine.normalizeCrop(writerCrop, 301, 201), writerCrop,
+    'this synthetic writer fixture must reproduce the old double-normalization bug');
+  const fixedStore = structuredClone(store);
+  fixedStore.sessions[0].source = { ...source, width: 301, height: 201 };
+  fixedStore.sessions[0].crop = { ...writerCrop };
+  fixedStore.sessions[0].history = fixedStore.sessions[0].history.map((entry) => ({
+    ...entry, crop: { ...writerCrop }
+  }));
+  const fixedBytes = Buffer.from(JSON.stringify(fixedStore));
+  const fixedPath = join(tempRoot, 'fixed-ratio-synthetic.json');
+  writeFileSync(fixedPath, fixedBytes, { flag: 'wx' });
+  const fixedHash = digest(fixedBytes);
+  const fixedDocument = readV1Store(readFileSync(fixedPath))[0];
+  assert.deepEqual(fixedDocument.crop, writerCrop,
+    'the adapter must not alter persisted fixed-ratio percentages');
+  assert.deepEqual(fixedDocument.history.map((item) => item.crop),
+    fixedStore.sessions[0].history.map((item) => item.crop),
+    'the adapter must preserve all fixed-ratio history crop coordinates');
+  assert.equal(fixedDocument.historyIndex, historyIndex);
+  assert.equal(fixedDocument.revision, 42);
+  assert.ok(Object.isFrozen(fixedDocument.history[0].crop));
+  assert.deepEqual(readFileSync(fixedPath), fixedBytes);
+  assert.equal(digest(readFileSync(fixedPath)), fixedHash,
+    'fixed-ratio adaptation must never mutate original V1 store bytes');
+
+  const invalidFixedCrop = (crop) => {
+    const invalid = structuredClone(fixedStore);
+    invalid.sessions[0].crop = { ...crop };
+    invalid.sessions[0].history[historyIndex].crop = { ...crop };
+    assert.throws(() => readV1Store(JSON.stringify(invalid)), TypeError);
+  };
+  invalidFixedCrop({ ...writerCrop, width: 54.5 }); // ratio mismatch
+  invalidFixedCrop({ ...writerCrop, x: 60 }); // beyond right image boundary
+  invalidFixedCrop({ ...writerCrop, y: -0.01 }); // negative coordinate
+  invalidFixedCrop({ ...writerCrop, width: 0.1 }); // too small for source
+  invalidFixedCrop({ ...writerCrop, width: Number.NaN }); // non-finite
+  invalidFixedCrop({ ...writerCrop, x: 23.28901 }); // noncanonical precision
+  invalidFixedCrop({ ...writerCrop, aspectRatio: '7:11' }); // unsupported
+  invalidFixedCrop({ ...writerCrop, unknown: 123 }); // unknown field
+
   assert.throws(() => readV1Store(Buffer.from('{')), SyntaxError);
   assert.throws(() => readV1Store(Buffer.from('{"version":2,"sessions":[]}')), /Unsupported or invalid V1/);
   assert.throws(() => readV1Store(Buffer.from('{"version":1,"sessions":[],"future":true}')), /unknown or missing fields/);
