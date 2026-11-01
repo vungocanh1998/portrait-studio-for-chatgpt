@@ -383,6 +383,114 @@ try {
   assert.equal(digest(readFileSync(fixedPath)), fixedHash,
     'all pure operations must leave the original V1 store unchanged');
 
+  // At the largest V1-accepted revision, an operation that does not
+  // change state/history must not be rejected by the overflow guard.
+  const maxRevision = Number.MAX_SAFE_INTEGER;
+  function maxRevisionDocument(historyCursor, revisionValue = maxRevision) {
+    const synthetic = structuredClone(store);
+    const raw = synthetic.sessions[0];
+    raw.revision = revisionValue;
+    raw.historyIndex = historyCursor;
+    raw.adjustments = structuredClone(raw.history[historyCursor].adjustments);
+    raw.preset = structuredClone(raw.history[historyCursor].preset);
+    raw.crop = structuredClone(raw.history[historyCursor].crop);
+    raw.preview.revision = revisionValue;
+    raw.export.revision = revisionValue;
+    return readV1Store(JSON.stringify(synthetic))[0];
+  }
+  const maxMiddle = maxRevisionDocument(historyIndex);
+  const maxExactState = {
+    ...operation,
+    expectedRevision: maxRevision,
+    state: {
+      adjustments: maxMiddle.adjustments,
+      preset: maxMiddle.preset,
+      crop: maxMiddle.crop
+    }
+  };
+  const maxNoOp = reduceEditDocument(maxMiddle, maxExactState);
+  assert.equal(maxNoOp.status, 'unchanged');
+  assert.strictEqual(maxNoOp.document, maxMiddle,
+    'exact-state operation at MAX_SAFE_INTEGER must preserve document identity');
+  assert.equal(maxNoOp.document.revision, maxRevision);
+  assert.equal(maxNoOp.document.historyIndex, historyIndex);
+  assert.equal(maxNoOp.document.history.length, 50);
+  assert.equal(getPreviewStatus(maxNoOp.document), 'confirmed');
+  assert.equal(getExportStatus(maxNoOp.document), 'saved');
+  assert.deepEqual(maxNoOp.document.preview, maxMiddle.preview);
+  assert.deepEqual(maxNoOp.document.export, maxMiddle.export);
+
+  const maxFirst = maxRevisionDocument(0);
+  const maxLast = maxRevisionDocument(49);
+  const maxUndoBoundary = {
+    type: 'undo', expectedRevision: maxRevision, expectedSource: identity,
+    timestamp: '2026-11-01T10:16:00.000Z'
+  };
+  const maxRedoBoundary = {
+    ...maxUndoBoundary, type: 'redo'
+  };
+  const boundaryUndo = reduceEditDocument(maxFirst, maxUndoBoundary);
+  const boundaryRedo = reduceEditDocument(maxLast, maxRedoBoundary);
+  for (const [noOp, original] of [[boundaryUndo, maxFirst], [boundaryRedo, maxLast]]) {
+    assert.equal(noOp.status, 'unchanged',
+      'history boundary at maximum revision must be an inert no-op');
+    assert.strictEqual(noOp.document, original);
+    assert.equal(noOp.document.revision, maxRevision);
+    assert.deepEqual(noOp.document.history, original.history);
+    assert.deepEqual(noOp.document.preview, original.preview);
+    assert.deepEqual(noOp.document.export, original.export);
+  }
+
+  // Real mutations must still fail closed at the maximum (no overflow).
+  assert.throws(() => reduceEditDocument(maxMiddle, {
+    ...operation, expectedRevision: maxRevision
+  }), /revision cannot be incremented safely/);
+  assert.throws(() => reduceEditDocument(maxMiddle, maxUndoBoundary),
+    /revision cannot be incremented safely/);
+  assert.throws(() => reduceEditDocument(maxMiddle, maxRedoBoundary),
+    /revision cannot be incremented safely/);
+  const maxConflict = reduceEditDocument(maxMiddle, {
+    ...operation, expectedRevision: maxRevision - 1
+  });
+  assert.equal(maxConflict.status, 'conflict');
+  assert.strictEqual(maxConflict.document, maxMiddle);
+  assert.equal(maxMiddle.revision, maxRevision);
+  assert.equal(maxMiddle.history.length, 50);
+
+  // MAX-1 can still perform one legitimate edit to MAX and then no-op.
+  const almostMax = maxRevisionDocument(historyIndex, maxRevision - 1);
+  const lastSafeEdit = reduceEditDocument(almostMax, {
+    ...operation, expectedRevision: maxRevision - 1
+  });
+  assert.equal(lastSafeEdit.status, 'applied');
+  assert.equal(lastSafeEdit.document.revision, maxRevision);
+  const lastSafeNoOp = reduceEditDocument(lastSafeEdit.document, {
+    type: 'setState', expectedRevision: maxRevision, expectedSource: identity,
+    timestamp: '2026-11-01T10:17:00.000Z',
+    state: {
+      adjustments: lastSafeEdit.document.adjustments,
+      preset: lastSafeEdit.document.preset,
+      crop: lastSafeEdit.document.crop
+    }
+  });
+  assert.equal(lastSafeNoOp.status, 'unchanged');
+  assert.strictEqual(lastSafeNoOp.document, lastSafeEdit.document);
+
+  // V1 fixed-aspect crops are safe at the limit too: no second normalization.
+  const fixedMaxSource = structuredClone(fixedStore);
+  fixedMaxSource.sessions[0].revision = maxRevision;
+  fixedMaxSource.sessions[0].preview.revision = maxRevision;
+  fixedMaxSource.sessions[0].export.revision = maxRevision;
+  const fixedMaxDocument = readV1Store(JSON.stringify(fixedMaxSource))[0];
+  const fixedMaxNoOp = reduceEditDocument(fixedMaxDocument, {
+    ...fixedNoOpRequest, expectedRevision: maxRevision
+  });
+  assert.equal(fixedMaxNoOp.status, 'unchanged');
+  assert.strictEqual(fixedMaxNoOp.document, fixedMaxDocument);
+  assert.deepEqual(fixedMaxNoOp.document.crop, writerCrop);
+  assert.equal(digest(readFileSync(filePath)), originalHash,
+    'max-revision pure operations must never write to V1 store');
+
   const invalidFreeCrop = (crop) => {
     const invalid = structuredClone(store);
     invalid.sessions[0].crop = { ...crop };
