@@ -1,23 +1,38 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const testRoot = mkdtempSync(join(root, '.cross-process-state-test-'));
+const testRoot = mkdtempSync(join(tmpdir(), 'portrait-studio-cross-process-'));
+const hostileParentRoot = mkdtempSync(join(tmpdir(), 'portrait-studio-hostile-parent-'));
 const localAppData = join(testRoot, 'AppData', 'Local');
 const packagedLocalAppData = join(localAppData, 'Packages', 'OpenAI.Codex_test', 'LocalCache', 'Local');
-const dataDir = join(localAppData, '.portrait-studio-for-chatgpt');
+const dataDir = join(testRoot, 'isolated-store');
+const sentinelPath = join(hostileParentRoot, 'sentinel.txt');
+const sentinelBytes = Buffer.from('synthetic hostile-parent sentinel\n');
+writeFileSync(sentinelPath, sentinelBytes, { flag: 'wx' });
+const sentinelEntries = readdirSync(hostileParentRoot).sort();
+const inheritedDataDir = process.env.PORTRAIT_STUDIO_DATA_DIR;
 const sourceSha256 = createHash('sha256').update('cross-process test image').digest('hex');
 const clients = [];
+
+process.env.PORTRAIT_STUDIO_DATA_DIR = hostileParentRoot;
 
 function startServer(appDataRoot) {
   const child = spawn(process.execPath, [resolve(root, 'server/index.mjs')], {
     cwd: root,
-    env: { ...process.env, USERPROFILE: testRoot, HOME: testRoot, LOCALAPPDATA: appDataRoot },
+    env: {
+      ...process.env,
+      USERPROFILE: testRoot,
+      HOME: testRoot,
+      LOCALAPPDATA: appDataRoot,
+      PORTRAIT_STUDIO_DATA_DIR: dataDir
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   });
@@ -131,7 +146,12 @@ try {
   assert.equal(
     existsSync(join(packagedLocalAppData, '.portrait-studio-for-chatgpt', 'sessions.json')),
     false,
-    'packaged and plain Windows app roots must resolve to one session file'
+    'the packaged app-data root must not receive isolated test state'
+  );
+  assert.equal(
+    existsSync(join(localAppData, '.portrait-studio-for-chatgpt', 'sessions.json')),
+    false,
+    'the plain app-data root must not receive isolated test state'
   );
 
   const rendererId = 'b0000000-0000-4000-8000-000000000000';
@@ -243,9 +263,20 @@ try {
   assert.equal(orphanDiagnostics.session.revision, 5);
   unlinkSync(lockPath);
 } finally {
-  await Promise.all(clients.map((client) => client.close()));
-  assert.ok(resolve(testRoot).startsWith(root + sep), 'test cleanup target must stay inside the workspace');
-  rmSync(testRoot, { recursive: true, force: true });
+  try {
+    await Promise.all(clients.map((client) => client.close()));
+    assert.deepEqual(readdirSync(hostileParentRoot).sort(), sentinelEntries, 'the inherited hostile data directory must stay untouched');
+    assert.deepEqual(readFileSync(sentinelPath), sentinelBytes, 'the inherited sentinel bytes must remain unchanged');
+  } finally {
+    if (inheritedDataDir === undefined)
+      delete process.env.PORTRAIT_STUDIO_DATA_DIR;
+    else
+      process.env.PORTRAIT_STUDIO_DATA_DIR = inheritedDataDir;
+    assert.ok(resolve(testRoot).startsWith(resolve(tmpdir()) + sep), 'test cleanup target must stay inside system temp');
+    assert.ok(resolve(hostileParentRoot).startsWith(resolve(tmpdir()) + sep), 'sentinel cleanup target must stay inside system temp');
+    rmSync(testRoot, { recursive: true, force: true });
+    rmSync(hostileParentRoot, { recursive: true, force: true });
+  }
 }
 
 console.log(`Portrait Studio cross-process state checks passed (MCP PIDs ${clients[0].child.pid} and ${clients[1].child.pid}).`);

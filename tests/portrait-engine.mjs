@@ -1,11 +1,15 @@
 ﻿import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const engine = require(resolve(root, 'ui/engine.js'));
+const fixture = JSON.parse(readFileSync(resolve(root, 'tests/fixtures/m1-g2-pr1.json'), 'utf8'));
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 assert.deepEqual(engine.normalizeCrop({ x: 0, y: 0, width: 100, height: 100 }), {
   x: 0,
@@ -51,5 +55,46 @@ const ratioCrop = engine.normalizeCrop({ x: 0, y: 0, width: 100, height: 100, as
 assert.deepEqual(engine.cropPixels(400, 500, ratioCrop), { x: 0, y: 0, width: 400, height: 500 });
 assert.throws(() => engine.cropPixels(0, 3000, { x: 0, y: 0, width: 100, height: 100 }), RangeError);
 assert.throws(() => engine.normalizeCrop({ x: Number.NaN, y: 0, width: 100, height: 100 }), TypeError);
+
+const sourcePixels = Buffer.from(fixture.source.rgba8);
+const sourceHash = sha256(sourcePixels);
+assert.equal(sourceHash, fixture.source.rgba8Sha256);
+const nativeCrop = engine.cropPixels(fixture.source.width, fixture.source.height, fixture.crop.selection);
+assert.deepEqual(nativeCrop, fixture.crop.bounds);
+const croppedPixels = [];
+for (let y = nativeCrop.y; y < nativeCrop.y + nativeCrop.height; y++) {
+  const start = (y * fixture.source.width + nativeCrop.x) * 4;
+  const end = start + nativeCrop.width * 4;
+  croppedPixels.push(...fixture.source.rgba8.slice(start, end));
+}
+assert.deepEqual(croppedPixels, fixture.crop.rgba8);
+assert.equal(sha256(Buffer.from(croppedPixels)), fixture.crop.rgba8Sha256);
+const nativeCropLegacyPixels = Uint8ClampedArray.from(croppedPixels);
+engine.applyColorAdjustments(nativeCropLegacyPixels, fixture.legacy.adjustments);
+assert.deepEqual(Array.from(nativeCropLegacyPixels), fixture.crop.legacyRgba8);
+assert.equal(sha256(Buffer.from(nativeCropLegacyPixels)), fixture.crop.legacyRgba8Sha256);
+
+const legacyPixels = Uint8ClampedArray.from(sourcePixels);
+engine.applyColorAdjustments(legacyPixels, fixture.legacy.adjustments);
+assert.deepEqual(Array.from(legacyPixels), fixture.legacy.rgba8);
+assert.equal(sha256(Buffer.from(legacyPixels)), fixture.legacy.rgba8Sha256);
+assert.equal(sha256(sourcePixels), sourceHash, 'legacy rendering must leave synthetic source RGBA8 bytes unchanged');
+
+assert.equal(fixture.futureWhiteBalanceContract.implemented, false);
+assert.equal(fixture.futureWhiteBalanceContract.neutralInputSha256, fixture.crop.legacyRgba8Sha256);
+assert.equal(fixture.futureWhiteBalanceContract.neutralOutputSha256, fixture.crop.legacyRgba8Sha256);
+assert.equal(fixture.futureRendererContract.implemented, false);
+assert.deepEqual(
+  [...Object.keys(fixture.futureRendererContract.accepted)].sort(),
+  [...fixture.futureRendererContract.requiredIdentityFields].sort()
+);
+for (const stale of fixture.futureRendererContract.staleVariants) {
+  assert.ok(fixture.futureRendererContract.requiredIdentityFields.includes(stale.field));
+  assert.notEqual(stale.value, fixture.futureRendererContract.accepted[stale.field]);
+}
+assert.deepEqual(
+  [...fixture.futureRendererContract.staleVariants.map(({ field }) => field)].sort(),
+  [...fixture.futureRendererContract.requiredIdentityFields].sort()
+);
 
 console.log('Portrait image-engine checks passed.');

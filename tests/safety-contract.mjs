@@ -53,6 +53,8 @@ assert.match(ui, /accept="image\/jpeg,image\/png/);
 assert.match(ui, /Save edited PNG to Downloads/);
 assert.match(server, /toolDefinition\('save_edited_png'/);
 assert.match(server, /PORTRAIT_STUDIO_DATA_DIR/);
+assert.match(server, /const isPackagedWindowsApp = process\.platform === \x27win32\x27/);
+assert.match(server, /const dataRoot = process\.env\.PORTRAIT_STUDIO_DATA_DIR \|\| resolve\(\s*isPackagedWindowsApp \? standardLocalAppData : localAppData/);
 assert.match(server, /visibility: \['app'\]/);
 assert.match(ui, /ui\/notifications\/tool-result/);
 assert.match(ui, /ui\/update-model-context/);
