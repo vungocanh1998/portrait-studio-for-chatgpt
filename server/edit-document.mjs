@@ -183,7 +183,11 @@ function adaptV1Store(store) {
     timestamp(raw.updatedAt, 'V1 updatedAt');
     revision(raw.revision, 'V1 revision');
     const source = normalizeV1Source(raw.source);
-    const state = normalizeV1State(raw, source);
+    const state = {
+      adjustments: normalizeV1Adjustments(raw.adjustments),
+      preset: normalizeV1Preset(raw.preset),
+      crop: normalizeV1Crop(raw.crop, source)
+    };
     if (!Array.isArray(raw.history) || raw.history.length < 1 || raw.history.length > maxHistory ||
         !Number.isSafeInteger(raw.historyIndex) || raw.historyIndex < 0 || raw.historyIndex >= raw.history.length)
       throw new TypeError('V1 history or cursor is invalid.');
