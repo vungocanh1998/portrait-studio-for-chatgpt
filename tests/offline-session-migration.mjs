@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync
+  chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Engine from '../ui/engine.js';
 import {
@@ -137,6 +137,44 @@ function runCrashChild(storePath, operation, checkpoint) {
   });
 }
 
+function runHardlinkCrashChild(storePath, operation, crashTarget) {
+  assertSyntheticPath(crashTarget);
+  const moduleUrl = pathToFileURL(resolve(repo, 'server/offline-session-migration.mjs')).href;
+  const call = operation === 'migrate'
+    ? `await migrateV1ToV2(base);`
+    : `await rollbackV2ToV1({ ...base, acknowledgeV2EditLoss: true });`;
+  const source = [
+    `import fs from 'node:fs';`,
+    `import { syncBuiltinESMExports } from 'node:module';`,
+    `const crashTarget = ${JSON.stringify(crashTarget)};`,
+    `const link = fs.linkSync;`,
+    `fs.linkSync = (source, published) => { link(source, published); if (published === crashTarget) process.exit(86); };`,
+    `syncBuiltinESMExports();`,
+    `const { migrateV1ToV2, rollbackV2ToV1 } = await import(${JSON.stringify(moduleUrl)});`,
+    `const storePath = ${JSON.stringify(storePath)};`,
+    `const base = { storePath, expectedStorePath: storePath, runtimeStorePaths: [storePath, storePath],`,
+    `  acquireQuiescence: async () => ({ assertHeld() {}, release() {} }) };`,
+    call,
+    `process.exit(0);`
+  ].join('\n');
+  return spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    encoding: 'utf8',
+    env: childEnv(dirname(storePath)),
+    windowsHide: true
+  });
+}
+
+function assertHardlinkPair(temporary, published) {
+  assertSyntheticPath(temporary);
+  assertSyntheticPath(published);
+  const temporaryStat = statSync(temporary);
+  const publishedStat = statSync(published);
+  assert.equal(temporaryStat.nlink, 2);
+  assert.equal(publishedStat.nlink, 2);
+  assert.equal(temporaryStat.dev, publishedStat.dev);
+  assert.equal(temporaryStat.ino, publishedStat.ino);
+}
+
 function clearSyntheticOrphanLock(storePath, childPid) {
   const path = `${storePath}.migration.lock`;
   assertSyntheticPath(path);
@@ -157,6 +195,21 @@ function addSyntheticV2Edit(storePath) {
   document.adjustments.exposureEV = 1;
   document.history.push(changed);
   document.historyIndex = 1;
+  const bytes = Buffer.from(JSON.stringify(value));
+  writeFileSync(storePath, bytes);
+  return bytes;
+}
+
+function addSecondSyntheticV2Edit(storePath) {
+  const value = JSON.parse(readFileSync(storePath, 'utf8'));
+  const document = value.sessions[0];
+  const changed = structuredClone(document.history[document.historyIndex]);
+  changed.adjustments.exposureEV = 2;
+  document.revision += 1;
+  document.updatedAt = '2026-11-01T00:00:02.000Z';
+  document.adjustments.exposureEV = 2;
+  document.history.push(changed);
+  document.historyIndex = document.history.length - 1;
   const bytes = Buffer.from(JSON.stringify(value));
   writeFileSync(storePath, bytes);
   return bytes;
@@ -204,6 +257,74 @@ async function testQuiescenceAndPaths() {
   assert.equal(existsSync(`${storePath}.migration.json`), true);
   const recovered = await recoverMigration(options(storePath));
   assert.equal(recovered.state, 'migrated');
+  assertSentinel();
+}
+
+async function testFinalSafetyAfterAsyncCheckpoints() {
+  for (const scenario of ['quiescence', 'source', 'writer-lock']) {
+    const { storePath, bytes } = makeStore(`final-migration-${scenario}`);
+    let held = true;
+    let expectedStoreBytes = bytes;
+    const errorCode = scenario === 'quiescence' ? 'quiescence_lost'
+      : scenario === 'source' ? 'source_changed' : 'legacy_writer_lock_active';
+    await rejectsCode(migrateV1ToV2(options(storePath, {
+      acquireQuiescence: async () => ({
+        assertHeld() { if (!held) throw new Error('synthetic lease was invalidated'); },
+        release() {}
+      }),
+      async onCheckpoint(name) {
+        if (name !== 'before-migration-rename') return;
+        await Promise.resolve();
+        if (scenario === 'quiescence') held = false;
+        if (scenario === 'source') {
+          const changed = JSON.parse(bytes.toString('utf8'));
+          changed.sessions[0].updatedAt = '2026-11-01T00:00:02.000Z';
+          expectedStoreBytes = Buffer.from(JSON.stringify(changed));
+          writeFileSync(storePath, expectedStoreBytes);
+        }
+        if (scenario === 'writer-lock')
+          writeFileSync(`${storePath}.lock`, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
+      }
+    })), errorCode);
+    assert.deepEqual(readFileSync(storePath), expectedStoreBytes, scenario);
+    const journal = JSON.parse(readFileSync(`${storePath}.migration.json`, 'utf8'));
+    assert.deepEqual(readFileSync(journal.backupPath), bytes, scenario);
+    assert.equal(JSON.parse(readFileSync(storePath, 'utf8')).version, 1, scenario);
+    if (scenario === 'writer-lock')
+      assert.equal(existsSync(`${storePath}.lock`), true);
+  }
+
+  for (const scenario of ['quiescence', 'source', 'writer-lock']) {
+    const { storePath, bytes } = makeStore(`final-rollback-${scenario}`);
+    const migration = await migrateV1ToV2(options(storePath));
+    const archivedV2Bytes = addSyntheticV2Edit(storePath);
+    let held = true;
+    let expectedStoreBytes = archivedV2Bytes;
+    const errorCode = scenario === 'quiescence' ? 'quiescence_lost'
+      : scenario === 'source' ? 'v2_changed_during_rollback' : 'legacy_writer_lock_active';
+    await rejectsCode(rollbackV2ToV1(options(storePath, {
+      acknowledgeV2EditLoss: true,
+      acquireQuiescence: async () => ({
+        assertHeld() { if (!held) throw new Error('synthetic lease was invalidated'); },
+        release() {}
+      }),
+      async onCheckpoint(name) {
+        if (name !== 'before-rollback-rename') return;
+        await Promise.resolve();
+        if (scenario === 'quiescence') held = false;
+        if (scenario === 'source')
+          expectedStoreBytes = addSecondSyntheticV2Edit(storePath);
+        if (scenario === 'writer-lock')
+          writeFileSync(`${storePath}.lock`, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
+      }
+    })), errorCode);
+    assert.deepEqual(readFileSync(storePath), expectedStoreBytes, scenario);
+    const journal = JSON.parse(readFileSync(`${storePath}.migration.json`, 'utf8'));
+    assert.deepEqual(readFileSync(journal.rollbackArchivePath), archivedV2Bytes, scenario);
+    assert.deepEqual(readFileSync(migration.backupPath), bytes, scenario);
+    if (scenario === 'writer-lock')
+      assert.equal(existsSync(`${storePath}.lock`), true);
+  }
   assertSentinel();
 }
 
@@ -308,6 +429,7 @@ async function testDigestAndRecoveryFailures() {
   const corrupt = makeStore('corrupt-backup-rollback');
   const migration = await migrateV1ToV2(options(corrupt.storePath));
   const migratedBytes = readFileSync(corrupt.storePath);
+  chmodSync(migration.backupPath, 0o600);
   unlinkSync(migration.backupPath);
   writeFileSync(migration.backupPath, Buffer.from('corrupt synthetic backup'), { flag: 'wx' });
   await rejectsCode(rollbackV2ToV1(options(corrupt.storePath, { acknowledgeV2EditLoss: true })), 'backup_digest_mismatch');
@@ -348,6 +470,74 @@ async function testRollbackCrashRecovery() {
   assertSentinel();
 }
 
+async function testInterruptedHardlinkPublication() {
+  if (process.platform === 'win32') {
+    console.log('POSIX link/unlink crash injection skipped on Windows; Windows atomic-move checkpoint tests remain active.');
+    return;
+  }
+
+  const journalStore = makeStore('hardlink-journal-publication');
+  const journalPath = `${journalStore.storePath}.migration.json`;
+  const journalCrash = runHardlinkCrashChild(journalStore.storePath, 'migrate', journalPath);
+  assert.equal(journalCrash.status, 86, journalCrash.stderr);
+  const journalTemp = readdirSync(dirname(journalPath))
+    .filter((name) => name.startsWith(`${basename(journalPath)}.`) && name.endsWith('.tmp'))
+    .map((name) => join(dirname(journalPath), name));
+  assert.equal(journalTemp.length, 1);
+  assertHardlinkPair(journalTemp[0], journalPath);
+  clearSyntheticOrphanLock(journalStore.storePath, journalCrash.pid);
+  const journalRecovery = await recoverMigration(options(journalStore.storePath));
+  assert.equal(journalRecovery.state, 'migrated');
+  assert.equal(existsSync(journalTemp[0]), false);
+  assert.equal(statSync(journalPath).nlink, 1);
+  assert.deepEqual(readFileSync(journalRecovery.backupPath), journalStore.bytes);
+
+  const backupStore = makeStore('hardlink-backup-publication');
+  const backupPath = `${backupStore.storePath}.v1-${digest(backupStore.bytes)}.backup`;
+  const backupCrash = runHardlinkCrashChild(backupStore.storePath, 'migrate', backupPath);
+  assert.equal(backupCrash.status, 86, backupCrash.stderr);
+  const backupJournal = JSON.parse(readFileSync(`${backupStore.storePath}.migration.json`, 'utf8'));
+  assertHardlinkPair(backupJournal.backupTempPath, backupJournal.backupPath);
+  clearSyntheticOrphanLock(backupStore.storePath, backupCrash.pid);
+  const backupRecovery = await recoverMigration(options(backupStore.storePath));
+  assert.equal(backupRecovery.state, 'migrated');
+  assert.deepEqual(readFileSync(backupRecovery.backupPath), backupStore.bytes);
+  assert.equal(existsSync(backupJournal.backupTempPath), false);
+  assert.equal(statSync(backupRecovery.backupPath).nlink, 1);
+
+  const archiveStore = makeStore('hardlink-archive-publication');
+  const migration = await migrateV1ToV2(options(archiveStore.storePath));
+  const currentV2Bytes = addSyntheticV2Edit(archiveStore.storePath);
+  const archivePath = `${archiveStore.storePath}.v2-${digest(currentV2Bytes)}.archive`;
+  const archiveCrash = runHardlinkCrashChild(archiveStore.storePath, 'rollback', archivePath);
+  assert.equal(archiveCrash.status, 86, archiveCrash.stderr);
+  const archiveJournal = JSON.parse(readFileSync(`${archiveStore.storePath}.migration.json`, 'utf8'));
+  assertHardlinkPair(archiveJournal.rollbackArchiveTempPath, archiveJournal.rollbackArchivePath);
+  clearSyntheticOrphanLock(archiveStore.storePath, archiveCrash.pid);
+  const archiveRecovery = await recoverMigration(options(archiveStore.storePath));
+  assert.equal(archiveRecovery.state, 'rolled-back');
+  assert.deepEqual(readFileSync(archiveStore.storePath), archiveStore.bytes);
+  assert.deepEqual(readFileSync(archiveRecovery.archivePath), currentV2Bytes);
+  assert.deepEqual(readFileSync(migration.backupPath), archiveStore.bytes);
+  assert.equal(existsSync(archiveJournal.rollbackArchiveTempPath), false);
+  assert.equal(statSync(archiveRecovery.archivePath).nlink, 1);
+
+  const untrustedStore = makeStore('untrusted-hardlink-alias');
+  const untrustedCrash = runCrashChild(untrustedStore.storePath, 'migrate', 'journal-prepared');
+  assert.equal(untrustedCrash.status, 86, untrustedCrash.stderr);
+  clearSyntheticOrphanLock(untrustedStore.storePath, untrustedCrash.pid);
+  const untrustedJournal = JSON.parse(readFileSync(`${untrustedStore.storePath}.migration.json`, 'utf8'));
+  const aliasPath = join(dirname(untrustedStore.storePath), 'untrusted-backup-alias');
+  assertSyntheticPath(aliasPath);
+  writeFileSync(untrustedJournal.backupPath, untrustedStore.bytes, { flag: 'wx' });
+  linkSync(untrustedJournal.backupPath, aliasPath);
+  await rejectsCode(recoverMigration(options(untrustedStore.storePath)), 'unsafe_file_identity');
+  assert.deepEqual(readFileSync(untrustedStore.storePath), untrustedStore.bytes);
+  assert.equal(existsSync(aliasPath), true);
+  assert.equal(statSync(untrustedJournal.backupPath).nlink, 2);
+  assertSentinel();
+}
+
 async function testNoRuntimeActivation() {
   const runtime = readFileSync(resolve(repo, 'server/index.mjs'), 'utf8');
   const sessions = readFileSync(resolve(repo, 'server/editor-state.mjs'), 'utf8');
@@ -360,11 +550,13 @@ try {
   writeFileSync(sentinelPath, sentinelBytes, { flag: 'wx' });
   await testBasicMigrationAndRollback();
   await testQuiescenceAndPaths();
+  await testFinalSafetyAfterAsyncCheckpoints();
   await testLegacyLocksAndWriterRelaunch();
   await testCompetingWriters();
   await testDigestAndRecoveryFailures();
   await testMigrationCrashRecovery();
   await testRollbackCrashRecovery();
+  await testInterruptedHardlinkPublication();
   await testNoRuntimeActivation();
   assertSentinel();
 } finally {

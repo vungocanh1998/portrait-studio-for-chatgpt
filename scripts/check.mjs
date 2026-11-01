@@ -36,6 +36,7 @@ const syntaxFiles = [
 const testFiles = [
   'tests/editor-state.mjs',
   'tests/edit-document.mjs',
+  'tests/offline-session-migration.mjs',
   'tests/mcp-contract.mjs',
   'tests/portrait-engine.mjs',
   'tests/safety-contract.mjs',

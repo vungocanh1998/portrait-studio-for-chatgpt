@@ -10,12 +10,13 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync
 } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readV1Store } from './edit-document.mjs';
 
@@ -97,6 +98,40 @@ function identity(stat) {
 function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino &&
     left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+
+function readHardlinkPair(source, target, name) {
+  if (!existsSync(source) || !existsSync(target))
+    return null;
+  const sourceBefore = lstatSync(source);
+  const targetBefore = lstatSync(target);
+  const sourceIdentity = identity(sourceBefore);
+  const targetIdentity = identity(targetBefore);
+  if (!sourceBefore.isFile() || sourceBefore.isSymbolicLink() || sourceBefore.nlink !== 2 ||
+      sourceBefore.ino === 0 || !targetBefore.isFile() || targetBefore.isSymbolicLink() ||
+      targetBefore.nlink !== 2 || !sameIdentity(sourceIdentity, targetIdentity))
+    return null;
+
+  let descriptor;
+  try {
+    descriptor = openSync(target, 'r');
+    const beforeOpen = identity(fstatSync(descriptor));
+    if (!sameIdentity(targetIdentity, beforeOpen))
+      fail('file_identity_changed', `${name} changed while it was being opened.`);
+    const bytes = readFileSync(descriptor);
+    const afterRead = identity(fstatSync(descriptor));
+    const sourceAfter = lstatSync(source);
+    const targetAfter = lstatSync(target);
+    if (!sameIdentity(beforeOpen, afterRead) ||
+        sourceAfter.nlink !== 2 || targetAfter.nlink !== 2 ||
+        !sameIdentity(sourceIdentity, identity(sourceAfter)) ||
+        !sameIdentity(targetIdentity, identity(targetAfter)))
+      fail('file_changed_during_read', `${name} hard-link pair changed while it was being read.`);
+    return { bytes, identity: afterRead, sha256: sha256(bytes) };
+  } finally {
+    if (descriptor !== undefined)
+      closeSync(descriptor);
+  }
 }
 
 function requireRegularFile(path, name) {
@@ -426,20 +461,35 @@ function validateJournal(value, storePath) {
   return value;
 }
 
-function readJournal(storePath) {
+function readJournal(storePath, repairInterruptedPublication = false) {
   const path = journalPath(storePath);
   if (!existsSync(path))
     fail('journal_missing', 'No migration journal exists to recover.');
   let stored;
+  let temporaryPath = null;
   try {
     stored = readStable(path, 'Migration journal');
   } catch (error) {
     if (error.code === 'ENOENT')
       fail('journal_missing', 'No migration journal exists to recover.');
-    throw error;
+    if (error.code !== 'unsafe_file_identity')
+      throw error;
+    const prefix = `${basename(path)}.`;
+    const candidates = readdirSync(dirname(path))
+      .filter((name) => name.startsWith(prefix) && name.endsWith('.tmp') &&
+        uuidPattern.test(name.slice(prefix.length, -4)))
+      .map((name) => resolve(dirname(path), name))
+      .map((candidate) => ({ candidate, pair: readHardlinkPair(candidate, path, 'Migration journal') }))
+      .filter(({ pair }) => pair);
+    if (candidates.length !== 1)
+      throw error;
+    ({ candidate: temporaryPath, pair: stored } = candidates[0]);
   }
-  const value = parseCanonicalJson(stored.bytes, 'Migration journal');
-  return { value: validateJournal(value, storePath), sha256: stored.sha256 };
+  const value = validateJournal(parseCanonicalJson(stored.bytes, 'Migration journal'), storePath);
+  if (temporaryPath && repairInterruptedPublication &&
+      !completeHardlinkPublication(temporaryPath, path, stored.bytes, stored.sha256, 'Migration journal'))
+    fail('unsafe_file_identity', 'The interrupted journal publication changed before recovery could complete it.');
+  return { value, sha256: stored.sha256 };
 }
 
 function verifyArtifact(path, expectedBytes, expectedDigest, name) {
@@ -449,15 +499,34 @@ function verifyArtifact(path, expectedBytes, expectedDigest, name) {
   return stored;
 }
 
+function completeHardlinkPublication(temporary, published, expectedBytes, expectedDigest, name) {
+  const pair = readHardlinkPair(temporary, published, name);
+  if (!pair)
+    return false;
+  if (pair.sha256 !== expectedDigest || (expectedBytes && !pair.bytes.equals(expectedBytes)))
+    fail('artifact_digest_mismatch', `${name} hard-link pair failed exact byte and SHA-256 verification.`);
+  const confirmed = readHardlinkPair(temporary, published, name);
+  if (!confirmed || !sameIdentity(pair.identity, confirmed.identity) ||
+      confirmed.sha256 !== pair.sha256 || !confirmed.bytes.equals(pair.bytes))
+    fail('unsafe_file_identity', `${name} hard-link pair changed before recovery.`);
+  unlinkSync(temporary);
+  fsyncDirectory(dirname(published));
+  verifyArtifact(published, pair.bytes, pair.sha256, name);
+  return true;
+}
+
 async function ensureBackup(journal, originalBytes, onCheckpoint) {
   const digest = journal.v1Sha256;
   if (existsSync(journal.backupPath)) {
-    verifyArtifact(journal.backupPath, originalBytes, digest, 'Immutable V1 backup');
-    chmodSync(journal.backupPath, 0o400);
-    if (existsSync(journal.backupTempPath)) {
+    if (existsSync(journal.backupTempPath) &&
+        !completeHardlinkPublication(journal.backupTempPath, journal.backupPath, originalBytes, digest, 'Immutable V1 backup')) {
+      verifyArtifact(journal.backupPath, originalBytes, digest, 'Immutable V1 backup');
+      verifyArtifact(journal.backupTempPath, originalBytes, digest, 'V1 backup temporary file');
       unlinkSync(journal.backupTempPath);
       fsyncDirectory(dirname(journal.backupPath));
     }
+    verifyArtifact(journal.backupPath, originalBytes, digest, 'Immutable V1 backup');
+    chmodSync(journal.backupPath, 0o400);
     return;
   }
   if (!existsSync(journal.backupTempPath))
@@ -559,12 +628,13 @@ export async function migrateV1ToV2(options) {
     await ensureBackup(journal, original.bytes, (name) => checkpoint(options, name));
     ensureMigrationTemp(journal, original.bytes, v2Bytes);
     await checkpoint(options, 'migration-temp-fsynced');
-    requireNoLegacyWriter(canonicalPath);
+    await checkpoint(options, 'before-migration-rename');
     await assertLease(lease);
+    verifyArtifact(journal.migrationTempPath, v2Bytes, journal.v2Sha256, 'V2 migration temporary file');
     const current = readStable(canonicalPath, 'V1 sessions.json');
     if (current.sha256 !== journal.v1Sha256 || !sameIdentity(current.identity, journal.sourceIdentity))
       fail('source_changed', 'The canonical V1 file changed after the verified backup; no replacement was made.');
-    await checkpoint(options, 'before-migration-rename');
+    requireNoLegacyWriter(canonicalPath);
     moveAtomically(journal.migrationTempPath, canonicalPath, true);
     await checkpoint(options, 'after-migration-rename');
     fsyncDirectory(dirname(canonicalPath));
@@ -581,6 +651,7 @@ export async function migrateV1ToV2(options) {
 }
 
 function verifyBackup(journal) {
+  completeHardlinkPublication(journal.backupTempPath, journal.backupPath, null, journal.v1Sha256, 'Immutable V1 backup');
   const backup = readStable(journal.backupPath, 'Immutable V1 backup');
   if (backup.sha256 !== journal.v1Sha256)
     fail('backup_digest_mismatch', 'The immutable V1 backup does not match its journaled digest.');
@@ -591,11 +662,12 @@ function verifyBackup(journal) {
 async function installMigration(journal, originalBytes, expectedV2Bytes, lease) {
   await ensureBackup(journal, originalBytes, async () => {});
   ensureMigrationTemp(journal, originalBytes, expectedV2Bytes);
-  requireNoLegacyWriter(journal.storePath);
   await assertLease(lease);
+  verifyArtifact(journal.migrationTempPath, expectedV2Bytes, journal.v2Sha256, 'V2 migration temporary file');
   const current = readStable(journal.storePath, 'V1 sessions.json');
   if (current.sha256 !== journal.v1Sha256 || !sameIdentity(current.identity, journal.sourceIdentity))
     fail('source_changed', 'Recovery found a V1 file with an unexpected digest or file identity.');
+  requireNoLegacyWriter(journal.storePath);
   moveAtomically(journal.migrationTempPath, journal.storePath, true);
 }
 
@@ -607,12 +679,15 @@ async function ensureArchive(journal, v2Bytes, onCheckpoint) {
   const path = journal.rollbackArchivePath;
   const temp = journal.rollbackArchiveTempPath;
   if (existsSync(path)) {
-    verifyArtifact(path, v2Bytes, journal.rollbackV2Sha256, 'Immutable V2 rollback archive');
-    chmodSync(path, 0o400);
-    if (existsSync(temp)) {
+    if (existsSync(temp) &&
+        !completeHardlinkPublication(temp, path, v2Bytes, journal.rollbackV2Sha256, 'Immutable V2 rollback archive')) {
+      verifyArtifact(path, v2Bytes, journal.rollbackV2Sha256, 'Immutable V2 rollback archive');
+      verifyArtifact(temp, v2Bytes, journal.rollbackV2Sha256, 'V2 rollback archive temporary file');
       unlinkSync(temp);
       fsyncDirectory(dirname(path));
     }
+    verifyArtifact(path, v2Bytes, journal.rollbackV2Sha256, 'Immutable V2 rollback archive');
+    chmodSync(path, 0o400);
     return;
   }
   if (!existsSync(temp))
@@ -662,7 +737,7 @@ export async function rollbackV2ToV1(options) {
   if (read.value.state !== 'migrated')
     fail('rollback_not_available', 'Rollback requires a completed V1-to-V2 migration journal.');
   return withOperation(options, 'rollback', read.value.transactionId, async (canonicalPath, lease) => {
-    const { value: journal } = readJournal(canonicalPath);
+    const { value: journal } = readJournal(canonicalPath, true);
     if (journal.state !== 'migrated' || journal.transactionId !== read.value.transactionId)
       fail('rollback_not_available', 'The migration journal changed before rollback began.');
     const current = readStable(canonicalPath, 'Current V2 sessions.json');
@@ -678,12 +753,14 @@ export async function rollbackV2ToV1(options) {
     await ensureArchive(journal, current.bytes, (name) => checkpoint(options, name));
     ensureRollbackTemp(journal, backup.bytes);
     await checkpoint(options, 'rollback-temp-fsynced');
-    requireNoLegacyWriter(canonicalPath);
+    await checkpoint(options, 'before-rollback-rename');
     await assertLease(lease);
+    verifyArtifact(journal.rollbackTempPath, backup.bytes, journal.v1Sha256, 'V1 rollback temporary file');
+    verifyArtifact(journal.rollbackArchivePath, current.bytes, journal.rollbackV2Sha256, 'Immutable V2 rollback archive');
     const latest = readStable(canonicalPath, 'Current V2 sessions.json');
     if (latest.sha256 !== journal.rollbackV2Sha256 || !sameIdentity(latest.identity, current.identity))
       fail('v2_changed_during_rollback', 'The V2 store changed after it was archived; no V1 restore was made.');
-    await checkpoint(options, 'before-rollback-rename');
+    requireNoLegacyWriter(canonicalPath);
     moveAtomically(journal.rollbackTempPath, canonicalPath, true);
     await checkpoint(options, 'after-rollback-rename');
     fsyncDirectory(dirname(canonicalPath));
@@ -733,11 +810,13 @@ async function recoverUnderLock(options, storePath, lease, journal) {
       validateV2(current.bytes);
       await ensureArchive(journal, current.bytes, async () => {});
       ensureRollbackTemp(journal, backup.bytes);
-      requireNoLegacyWriter(storePath);
       await assertLease(lease);
+      verifyArtifact(journal.rollbackTempPath, backup.bytes, journal.v1Sha256, 'V1 rollback temporary file');
+      verifyArtifact(journal.rollbackArchivePath, current.bytes, journal.rollbackV2Sha256, 'Immutable V2 rollback archive');
       const latest = readStable(storePath, 'Current V2 sessions.json');
       if (latest.sha256 !== journal.rollbackV2Sha256 || !sameIdentity(latest.identity, current.identity))
         fail('v2_changed_during_recovery', 'The V2 store changed during rollback recovery.');
+      requireNoLegacyWriter(storePath);
       moveAtomically(journal.rollbackTempPath, storePath, true);
       finishRollback(journal);
     } else {
@@ -767,7 +846,7 @@ export async function recoverMigration(options) {
   const storePath = resolveStorePath(options);
   const initial = readJournal(storePath);
   return withOperation(options, 'recover', initial.value.transactionId, async (canonicalPath, lease) => {
-    const latest = readJournal(canonicalPath);
+    const latest = readJournal(canonicalPath, true);
     if (latest.sha256 !== initial.sha256)
       fail('journal_changed', 'The migration journal changed before recovery acquired its lock.');
     return recoverUnderLock(options, canonicalPath, lease, latest.value);
