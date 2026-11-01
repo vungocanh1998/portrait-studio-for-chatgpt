@@ -536,6 +536,7 @@ async function testInterruptedHardlinkPublication() {
   assert.equal(existsSync(aliasPath), true);
   assert.equal(statSync(untrustedJournal.backupPath).nlink, 2);
   assertSentinel();
+  console.log('POSIX link/unlink crash recovery and hostile-alias checks passed.');
 }
 
 async function testNoRuntimeActivation() {

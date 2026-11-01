@@ -14,7 +14,7 @@ The project uses Node.js built-ins and has no test-runner dependency. From the r
 npm run check
 ~~~
 
-This checks syntax for the server, scripts, UI engine and test files, then runs the editor-state, EditDocument, offline migration/rollback, MCP contract, portrait engine, safety contract, cross-process state, Windows app-data fallback and version-consistency suites. It stops at the first failure. The UI-host script is syntax-checked here but its interactive browser smoke remains separate.
+This checks syntax for the server, scripts, UI engine and test files, then runs the editor-state, EditDocument, offline migration/rollback, MCP contract, portrait engine, safety contract, cross-process state, Windows app-data fallback and version-consistency suites. It stops at the first failure. The UI-host script is syntax-checked here but its interactive browser smoke remains separate. CI retains the full `npm run check` run on Windows and runs `node tests/offline-session-migration.mjs` on Ubuntu, where the POSIX hard-link crash recovery and hostile-alias checks execute rather than skip.
 
 The safety contract validates the known 300 × 300 synthetic fixture and its approved hash when that ignored file is present locally. It also passes when the fixture is absent, so clean public checkouts do not need to contain an image.
 
