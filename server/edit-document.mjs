@@ -304,14 +304,32 @@ function normalizeOperationPreset(value) {
   return { name: value.name, intensity: Number(Number(value.intensity).toFixed(1)) };
 }
 
-function normalizeOperationState(value, source) {
+function normalizeOperationCrop(value, source) {
+  exactKeys(value, cropKeys, 'Operation crop');
+
+  // A crop emitted by the V1 writer is already normalized to four decimal
+  // percentages. Fixed-aspect crops can drift if passed through the V1 engine
+  // a second time. Preserve any strictly valid stored crop byte-for-byte,
+  // including after a color-only edit or a pre-normalized operation replay.
+  // Invalid/unrounded selections still use the V1 engine exactly once.
+  try {
+    return normalizeV1Crop(value, source);
+  } catch (error) {
+    if (!(error instanceof TypeError))
+      throw error;
+    return Engine.normalizeCrop(value, source.width, source.height);
+  }
+}
+
+function normalizeOperationState(value, source, currentCrop) {
   exactKeys(value, stateKeys, 'Operation state');
   const cropInput = value.crop;
   exactKeys(cropInput, cropKeys, 'Operation crop');
+  const isUnchangedCrop = cropKeys.every((key) => cropInput[key] === currentCrop[key]);
   return {
     adjustments: normalizeOperationAdjustments(value.adjustments),
     preset: normalizeOperationPreset(value.preset),
-    crop: Engine.normalizeCrop(cropInput, source.width, source.height)
+    crop: isUnchangedCrop ? clone(currentCrop) : normalizeOperationCrop(cropInput, source)
   };
 }
 
@@ -337,7 +355,7 @@ export function normalizeEditOperation(document, input) {
     expectedRevision: input.expectedRevision,
     expectedSource,
     timestamp: input.timestamp,
-    ...(type === 'setState' ? { state: normalizeOperationState(input.state, document.source) } : {})
+    ...(type === 'setState' ? { state: normalizeOperationState(input.state, document.source, document.crop) } : {})
   });
 }
 
