@@ -248,4 +248,4 @@ try {
   rmSync(testRoot, { recursive: true, force: true });
 }
 
-console.log(`Portrait Studio cross-process state checks passed (MCP PIDs ${clients[0].child.pid} and ${clients[1].child.pid}, shared store ${join(dataDir, 'sessions.json')}).`);
+console.log(`Portrait Studio cross-process state checks passed (MCP PIDs ${clients[0].child.pid} and ${clients[1].child.pid}).`);

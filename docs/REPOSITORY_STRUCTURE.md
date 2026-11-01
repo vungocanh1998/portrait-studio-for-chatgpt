@@ -4,6 +4,9 @@ This tree describes tracked public source on the V0.2.8 baseline plus the docume
 
 ~~~text
 .
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 ├── .codex-plugin/
 │   └── plugin.json
 ├── .gitignore
@@ -11,6 +14,7 @@ This tree describes tracked public source on the V0.2.8 baseline plus the docume
 ├── AGENTS.md
 ├── LICENSE
 ├── NOTICE
+├── package.json
 ├── README.md
 ├── SBOM.cdx.json
 ├── docs/
@@ -34,6 +38,7 @@ This tree describes tracked public source on the V0.2.8 baseline plus the docume
 ├── mcp.json
 ├── plugin.json
 ├── scripts/
+│   ├── check.mjs
 │   └── preview.mjs
 ├── server/
 │   ├── editor-state.mjs
@@ -58,7 +63,8 @@ This tree describes tracked public source on the V0.2.8 baseline plus the docume
 - server/ contains the local MCP process and persistent editor-session logic.
 - ui/ contains the MCP App editor and deterministic image engine.
 - tests/ contains dependency-free source checks and the local synthetic browser harness.
-- scripts/preview.mjs serves the editor for local preview.
+- scripts/check.mjs runs the syntax and regression checks shared by `npm run check` and CI; scripts/preview.mjs serves the editor for local preview.
+- .github/workflows/ci.yml runs `npm run check` on pull requests using Windows and Node.js 24.
 - docs/ records current architecture, planned milestones, quality safeguards, acceptance, testing, and version policy.
 - legacy/affinity/ preserves archived material and is not the active editing engine.
 
