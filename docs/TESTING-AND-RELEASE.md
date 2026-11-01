@@ -14,11 +14,11 @@ The project uses Node.js built-ins and has no test-runner dependency. From the r
 npm run check
 ~~~
 
-This checks syntax for the server, scripts, UI engine and test files, then runs the editor-state, MCP contract, portrait engine, safety contract, cross-process state and version-consistency suites. It stops at the first failure. The UI-host script is syntax-checked here but its interactive browser smoke remains separate.
+This checks syntax for the server, scripts, UI engine and test files, then runs the editor-state, EditDocument, MCP contract, portrait engine, safety contract, cross-process state, Windows app-data fallback and version-consistency suites. It stops at the first failure. The UI-host script is syntax-checked here but its interactive browser smoke remains separate.
 
 The safety contract validates the known 300 × 300 synthetic fixture and its approved hash when that ignored file is present locally. It also passes when the fixture is absent, so clean public checkouts do not need to contain an image.
 
-The check runner simulates a hostile parent data-directory override and verifies that each child receives its own generated temporary `PORTRAIT_STUDIO_DATA_DIR`; the sentinel stays unchanged. The cross-process state suite repeats that check for its MCP children, confirms they share one synthetic store, and checks an external sentinel directory. A text fixture pins legacy RGBA8 pixels, native crop pixels and synthetic source RGBA8 hash/immutability; White Balance and renderer identity entries are contract-only vectors for later planned work and enable no M1 behavior.
+The check runner simulates a hostile parent data-directory override and verifies that each child receives its own generated temporary `PORTRAIT_STUDIO_DATA_DIR`; the sentinel stays unchanged. The cross-process state suite repeats that check for its MCP children, confirms they share one synthetic store, and checks an external sentinel directory. The EditDocument suite reads a synthetic V1 store created under an OS temp directory and checks a frozen V2 model, strict read-only adaptation, revision/history contracts and unchanged input bytes. It never calls EditorSessions or its writer. A text fixture pins legacy RGBA8 pixels, native crop pixels and synthetic source RGBA8 hash/immutability; White Balance and renderer identity entries remain contract-only vectors.
 
 ## Local browser harness
 

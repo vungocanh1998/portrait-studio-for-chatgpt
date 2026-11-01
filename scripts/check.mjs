@@ -16,10 +16,12 @@ process.env.PORTRAIT_STUDIO_DATA_DIR = hostileParentRoot;
 const syntaxFiles = [
   'server/index.mjs',
   'server/editor-state.mjs',
+  'server/edit-document.mjs',
   'scripts/preview.mjs',
   'scripts/check.mjs',
   'ui/engine.js',
   'tests/editor-state.mjs',
+  'tests/edit-document.mjs',
   'tests/mcp-contract.mjs',
   'tests/portrait-engine.mjs',
   'tests/safety-contract.mjs',
@@ -31,6 +33,7 @@ const syntaxFiles = [
 
 const testFiles = [
   'tests/editor-state.mjs',
+  'tests/edit-document.mjs',
   'tests/mcp-contract.mjs',
   'tests/portrait-engine.mjs',
   'tests/safety-contract.mjs',
