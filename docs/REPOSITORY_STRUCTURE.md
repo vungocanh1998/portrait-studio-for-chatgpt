@@ -1,6 +1,6 @@
 # Repository structure
 
-This tree describes tracked public source on the V0.2.8 baseline plus the documentation and test files in this update. It contains no image fixtures, session stores, credentials, local exports, or future placeholder engine directories.
+This tree describes tracked public source on the V0.2.8 baseline plus the accepted PR1/PR2 source and current documentation and test files. It contains no image fixtures, session stores, credentials, local exports, or future placeholder engine directories.
 
 ~~~text
 .
@@ -39,18 +39,26 @@ This tree describes tracked public source on the V0.2.8 baseline plus the docume
 ├── plugin.json
 ├── scripts/
 │   ├── check.mjs
+│   ├── offline-atomic-move.ps1
 │   └── preview.mjs
 ├── server/
+│   ├── edit-document.mjs
 │   ├── editor-state.mjs
-│   └── index.mjs
+│   ├── index.mjs
+│   └── offline-session-migration.mjs
 ├── tests/
 │   ├── cross-process-state.mjs
 │   ├── editor-state.mjs
+│   ├── edit-document.mjs
+│   ├── fixtures/
+│   │   └── m1-g2-pr1.json
 │   ├── mcp-contract.mjs
+│   ├── offline-session-migration.mjs
 │   ├── portrait-engine.mjs
 │   ├── safety-contract.mjs
 │   ├── ui-host.mjs
-│   └── version-consistency.mjs
+│   ├── version-consistency.mjs
+│   └── windows-appdata-fallback.mjs
 └── ui/
     ├── engine.js
     └── studio.html

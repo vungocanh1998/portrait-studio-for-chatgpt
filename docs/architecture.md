@@ -22,6 +22,10 @@ Only `open_portrait_studio` attaches the MCP App resource URI; data and edit too
 
 Color controls use deterministic canvas pixel operations. They change pixels but not face geometry or the selected source file. Color is global: there is no skin mask, and this phase does not implement healing or generative retouching. The manual clone brush remains a UI-only operation and is not included in chat Undo/Redo history; chat history covers color and crop state.
 
+## Offline schema migration code (not runtime)
+
+The source includes an explicit-path V1-to-V2 migration, journal recovery, and V2-to-V1 rollback module. It is not imported by `server/index.mjs` or `server/editor-state.mjs`; the live V0.2.8 session writer remains V1. The module requires the local and packaged store paths to resolve to the same file, refuses any present or ambiguous V1 writer lock, and requires an external quiescence lease that prevents active hosts and relaunch. No lease provider is wired here, and no real or private session store has been read or migrated. Synthetic tests cover the byte-exact V1 backup, durable journal, atomic replacement, crash recovery, rollback archive, and the loss notice for post-V2 edits. Windows atomic moves use `MoveFileEx` with write-through; POSIX replacements fsync the containing directory. This source implementation does not mean M1 has shipped.
+
 ## Local-first image and export flow
 
 Source and reference images remain in browser memory during normal editing. The MCP process receives source metadata only. Reference analysis is a separate explicit action: pressing “Ask ChatGPT for a color suggestion” uploads a reduced, metadata-free preview of the user-selected reference. Chat edits do not upload source or reference pixels.
