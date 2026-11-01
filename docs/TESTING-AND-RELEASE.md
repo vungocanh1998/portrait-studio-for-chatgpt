@@ -8,40 +8,13 @@ This repository update aligns the MCP server and editor host version fields with
 
 ## Source syntax and regression checks
 
-The project uses Node.js built-ins and has no test-runner dependency. Run from the repository root:
+The project uses Node.js built-ins and has no test-runner dependency. From the repository root on Node.js 24, run the same check used by CI:
 
 ~~~powershell
-$syntaxFiles = @(
-  'server/index.mjs',
-  'server/editor-state.mjs',
-  'scripts/preview.mjs',
-  'ui/engine.js',
-  'tests/editor-state.mjs',
-  'tests/mcp-contract.mjs',
-  'tests/portrait-engine.mjs',
-  'tests/safety-contract.mjs',
-  'tests/cross-process-state.mjs',
-  'tests/ui-host.mjs',
-  'tests/version-consistency.mjs'
-)
-foreach ($file in $syntaxFiles) {
-  node --check $file
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-}
-
-$testFiles = @(
-  'tests/editor-state.mjs',
-  'tests/mcp-contract.mjs',
-  'tests/portrait-engine.mjs',
-  'tests/safety-contract.mjs',
-  'tests/cross-process-state.mjs',
-  'tests/version-consistency.mjs'
-)
-foreach ($file in $testFiles) {
-  node $file
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-}
+npm run check
 ~~~
+
+This checks syntax for the server, scripts, UI engine and test files, then runs the editor-state, MCP contract, portrait engine, safety contract, cross-process state and version-consistency suites. It stops at the first failure. The UI-host script is syntax-checked here but its interactive browser smoke remains separate.
 
 The safety contract validates the known 300 × 300 synthetic fixture and its approved hash when that ignored file is present locally. It also passes when the fixture is absent, so clean public checkouts do not need to contain an image.
 
