@@ -376,9 +376,6 @@ export function reduceEditDocument(document, input) {
   const operation = normalizeEditOperation(document, input);
   if (operation.expectedRevision !== document.revision || !sourceMatches(document.source, operation.expectedSource))
     return result('conflict', document);
-  if (document.revision === Number.MAX_SAFE_INTEGER)
-    throw new RangeError('EditDocument revision cannot be incremented safely.');
-
   if (operation.type === 'setState') {
     if (JSON.stringify(operation.state) === JSON.stringify({
       adjustments: document.adjustments,
@@ -386,6 +383,10 @@ export function reduceEditDocument(document, input) {
       crop: document.crop
     }))
       return result('unchanged', document);
+    // Only an effective edit consumes a revision. A no-op is still valid at
+    // MAX_SAFE_INTEGER and must not alter preview/history metadata.
+    if (document.revision === Number.MAX_SAFE_INTEGER)
+      throw new RangeError('EditDocument revision cannot be incremented safely.');
     const history = document.history.slice(0, document.historyIndex + 1);
     history.push(operation.state);
     if (history.length > maxHistory)
@@ -404,6 +405,9 @@ export function reduceEditDocument(document, input) {
   const historyIndex = document.historyIndex + (operation.type === 'undo' ? -1 : 1);
   if (historyIndex < 0 || historyIndex >= document.history.length)
     return result('unchanged', document);
+  // Boundary undo/redo does not consume a revision, even at the maximum.
+  if (document.revision === Number.MAX_SAFE_INTEGER)
+    throw new RangeError('EditDocument revision cannot be incremented safely.');
   const next = {
     ...document,
     ...document.history[historyIndex],
