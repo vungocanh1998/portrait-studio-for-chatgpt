@@ -105,12 +105,48 @@ function normalizeV1Preset(value) {
 
 function normalizeV1Crop(value, source) {
   exactKeys(value, cropKeys, 'V1 crop');
-  const normalized = source
-    ? Engine.normalizeCrop(value, source.width, source.height)
-    : Engine.normalizeCrop(value);
-  if (cropKeys.some((key) => normalized[key] !== value[key]))
-    throw new TypeError('V1 crop is not in canonical form.');
-  return normalized;
+  if (!Engine.aspectRatioNames.includes(value.aspectRatio))
+    throw new TypeError('V1 crop aspect ratio is invalid.');
+
+  // The V1 writer stores percentages rounded to four decimal places. Applying
+  // normalizeCrop again to a fixed ratio can shift a valid stored coordinate
+  // by 0.0001, so this read-only adapter validates instead of re-normalizing.
+  for (const key of ['x', 'y', 'width', 'height']) {
+    const number = value[key];
+    if (typeof number !== 'number' || !Number.isFinite(number) ||
+        number !== Number(number.toFixed(4)))
+      throw new TypeError('V1 crop coordinates must be finite four-decimal percentages.');
+  }
+
+  // A boundary is the sum of up to two rounded values; allow only that
+  // rounding uncertainty, never an unrestricted geometric tolerance.
+  const boundaryTolerance = 0.0001 + 1e-9;
+  const minimumWidth = source ? 100 / source.width : 5;
+  const minimumHeight = source ? 100 / source.height : 5;
+  if (value.x < 0 || value.y < 0 ||
+      value.width < minimumWidth - boundaryTolerance ||
+      value.height < minimumHeight - boundaryTolerance ||
+      value.x + value.width > 100 + boundaryTolerance ||
+      value.y + value.height > 100 + boundaryTolerance)
+    throw new TypeError('V1 crop is outside its source bounds.');
+
+  if (value.aspectRatio !== 'free') {
+    if (!source)
+      throw new TypeError('V1 fixed-ratio crop requires source dimensions.');
+    const [numerator, denominator] = value.aspectRatio.split(':').map(Number);
+    const target = numerator / denominator;
+    const scaledWidth = value.width * source.width;
+    const scaledHeight = value.height * source.height * target;
+    // V1 independently rounds width and height to 0.0001 percentage units.
+    // These source-dimension-weighted rounding bounds accept writer output
+    // without accepting arbitrary off-ratio geometry.
+    const ratioTolerance = 0.00005 * (source.width + source.height * target) + 1e-9;
+    if (Math.abs(scaledWidth - scaledHeight) > ratioTolerance)
+      throw new TypeError('V1 crop fixed aspect ratio is invalid.');
+  }
+
+  // Preserve exact writer bytes/coordinates for the current edit and history.
+  return clone(value);
 }
 
 function normalizeV1State(value, source) {
