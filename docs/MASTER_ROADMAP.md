@@ -3,7 +3,7 @@
 **Baseline:** V0.2.8, Gate 0 accepted on 2026-10-25.
 **Next milestone:** M1 — Shared Editing Engine + White Balance.
 
-Every item below is planned. The existing local color, crop, undo/redo, manual clone, and verified PNG export remain the supported V0.2.8 scope.
+Every M1–M8 product feature remains planned. The existing local color, crop, undo/redo, manual clone, and verified PNG export remain the supported V0.2.8 scope. M1-G2-PR3 adds unconnected offline migration/rollback source code and synthetic tests; it has not migrated data or shipped M1 functionality.
 
 ## M1 — Shared Editing Engine + White Balance — PLANNED, NEXT
 
