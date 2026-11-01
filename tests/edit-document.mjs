@@ -244,6 +244,15 @@ try {
   assert.equal(digest(readFileSync(fixedPath)), fixedHash,
     'fixed-ratio adaptation must never mutate original V1 store bytes');
 
+  const invalidFreeCrop = (crop) => {
+    const invalid = structuredClone(store);
+    invalid.sessions[0].crop = { ...crop };
+    invalid.sessions[0].history[historyIndex].crop = { ...crop };
+    assert.throws(() => readV1Store(JSON.stringify(invalid)), TypeError);
+  };
+  invalidFreeCrop({ ...history[historyIndex].crop, x: 0, width: 100.0001 });
+  invalidFreeCrop({ ...history[historyIndex].crop, x: 0, width: 0.2499 });
+
   const invalidFixedCrop = (crop) => {
     const invalid = structuredClone(fixedStore);
     invalid.sessions[0].crop = { ...crop };

@@ -120,12 +120,14 @@ function normalizeV1Crop(value, source) {
 
   // A boundary is the sum of up to two rounded values; allow only that
   // rounding uncertainty, never an unrestricted geometric tolerance.
-  const boundaryTolerance = 0.0001 + 1e-9;
+  const coordinateRoundingTolerance = 0.00005 + 1e-9;
+  const boundaryTolerance = coordinateRoundingTolerance * 2;
   const minimumWidth = source ? 100 / source.width : 5;
   const minimumHeight = source ? 100 / source.height : 5;
-  if (value.x < 0 || value.y < 0 ||
-      value.width < minimumWidth - boundaryTolerance ||
-      value.height < minimumHeight - boundaryTolerance ||
+  if (value.x < 0 || value.x > 100 || value.y < 0 || value.y > 100 ||
+      value.width > 100 || value.height > 100 ||
+      value.width < minimumWidth - coordinateRoundingTolerance ||
+      value.height < minimumHeight - coordinateRoundingTolerance ||
       value.x + value.width > 100 + boundaryTolerance ||
       value.y + value.height > 100 + boundaryTolerance)
     throw new TypeError('V1 crop is outside its source bounds.');
