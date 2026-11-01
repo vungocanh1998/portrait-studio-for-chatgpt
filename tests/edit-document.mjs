@@ -244,6 +244,145 @@ try {
   assert.equal(digest(readFileSync(fixedPath)), fixedHash,
     'fixed-ratio adaptation must never mutate original V1 store bytes');
 
+  // Regression: V1 writer-generated fixed-ratio coordinates must survive
+  // every state operation, not just the read-only adapter. A second
+  // Engine.normalizeCrop pass would drift the stored height from 100.
+  const fixedIdentity = {
+    ...identity,
+    width: fixedStore.sessions[0].source.width,
+    height: fixedStore.sessions[0].source.height
+  };
+  const fixedNoOpRequest = {
+    type: 'setState',
+    expectedRevision: fixedDocument.revision,
+    expectedSource: fixedIdentity,
+    timestamp: '2026-11-01T10:11:00.000Z',
+    state: {
+      adjustments: fixedDocument.adjustments,
+      preset: fixedDocument.preset,
+      crop: { ...fixedDocument.crop }
+    }
+  };
+  const normalizedFixedNoOp = normalizeEditOperation(fixedDocument, fixedNoOpRequest);
+  assert.deepEqual(normalizedFixedNoOp.state.crop, writerCrop,
+    'operation normalization must not drift a trusted unchanged V1 crop');
+  const fixedNoOp = reduceEditDocument(fixedDocument, fixedNoOpRequest);
+  assert.equal(fixedNoOp.status, 'unchanged');
+  assert.strictEqual(fixedNoOp.document, fixedDocument,
+    'exact-state setState must not change revision, history, or preview');
+  assert.equal(fixedNoOp.document.revision, 42);
+  assert.equal(fixedNoOp.document.history.length, 50);
+  assert.equal(fixedNoOp.document.historyIndex, historyIndex);
+  assert.equal(getPreviewStatus(fixedNoOp.document), 'confirmed');
+  assert.deepEqual(fixedNoOp.document.preview, fixedStore.sessions[0].preview);
+  assert.strictEqual(reduceEditDocument(fixedDocument, normalizedFixedNoOp).document, fixedDocument,
+    'already normalized exact-state operation must also remain a no-op');
+
+  const fixedColorRequest = {
+    ...fixedNoOpRequest,
+    timestamp: '2026-11-01T10:12:00.000Z',
+    state: {
+      adjustments: { ...fixedDocument.adjustments, exposureEV: 1.25 },
+      preset: null,
+      crop: { ...writerCrop }
+    }
+  };
+  const fixedColorNormalized = normalizeEditOperation(fixedDocument, fixedColorRequest);
+  assert.deepEqual(fixedColorNormalized.state.crop, writerCrop);
+  const fixedColor = reduceEditDocument(fixedDocument, fixedColorRequest);
+  assert.equal(fixedColor.status, 'applied');
+  assert.equal(fixedColor.document.revision, 43);
+  assert.deepEqual(fixedColor.document.crop, writerCrop,
+    'color-only setState must preserve exact current crop bytes');
+  assert.deepEqual(fixedColor.document.history.at(-1).crop, writerCrop,
+    'color-only setState must preserve exact crop in newly appended history');
+  assert.equal(fixedColor.document.history.length, historyIndex + 2);
+  assert.equal(fixedColor.document.historyIndex, historyIndex + 1);
+  assert.equal(getPreviewStatus(fixedColor.document), 'pending');
+  assert.deepEqual(fixedDocument.crop, writerCrop,
+    'the frozen V1-adapted document must remain unchanged');
+  const fixedColorFromNormalized = reduceEditDocument(fixedDocument, fixedColorNormalized);
+  assert.deepEqual(fixedColorFromNormalized.document, fixedColor.document,
+    'normalizing an operation before reduction must have identical results');
+
+  const fixedUndo = reduceEditDocument(fixedColor.document, {
+    type: 'undo', expectedRevision: 43, expectedSource: fixedIdentity,
+    timestamp: '2026-11-01T10:13:00.000Z'
+  });
+  assert.equal(fixedUndo.status, 'applied');
+  assert.equal(fixedUndo.document.revision, 44);
+  assert.deepEqual(fixedUndo.document.crop, writerCrop);
+  assert.equal(fixedUndo.document.historyIndex, historyIndex);
+  const fixedRedo = reduceEditDocument(fixedUndo.document, {
+    type: 'redo', expectedRevision: 44, expectedSource: fixedIdentity,
+    timestamp: '2026-11-01T10:14:00.000Z'
+  });
+  assert.equal(fixedRedo.status, 'applied');
+  assert.equal(fixedRedo.document.revision, 45);
+  assert.deepEqual(fixedRedo.document.crop, writerCrop);
+  assert.equal(fixedRedo.document.historyIndex, historyIndex + 1);
+
+  // A genuinely new crop still enters the V0.2.8 normalizer exactly once.
+  // A second normalization is not guaranteed to be idempotent on fixed ratios.
+  const freshCropInput = {
+    x: 12, y: 8, width: 60, height: 60, aspectRatio: '4:5'
+  };
+  const expectedNewCrop = Engine.normalizeCrop(freshCropInput, 301, 201);
+  assert.notDeepEqual(expectedNewCrop, writerCrop);
+  const newCropRequest = {
+    ...fixedNoOpRequest,
+    timestamp: '2026-11-01T10:15:00.000Z',
+    state: {
+      adjustments: fixedDocument.adjustments,
+      preset: fixedDocument.preset,
+      crop: freshCropInput
+    }
+  };
+  const normalizedNewCrop = normalizeEditOperation(fixedDocument, newCropRequest);
+  assert.deepEqual(normalizedNewCrop.state.crop, expectedNewCrop,
+    'new crop must use the existing V1 engine geometry once');
+  const newCrop = reduceEditDocument(fixedDocument, newCropRequest);
+  assert.equal(newCrop.status, 'applied');
+  assert.deepEqual(newCrop.document.crop, expectedNewCrop);
+  assert.deepEqual(newCrop.document.history.at(-1).crop, expectedNewCrop);
+  const preNormalizedNewCrop = reduceEditDocument(fixedDocument, normalizedNewCrop);
+  assert.deepEqual(preNormalizedNewCrop.document.crop, expectedNewCrop,
+    'already normalized new crop must not drift during reduction');
+  assert.deepEqual(preNormalizedNewCrop.document, newCrop.document);
+  assert.deepEqual(newCrop.document.source, fixedDocument.source);
+  assert.deepEqual(fixedDocument.history[historyIndex].crop, writerCrop);
+
+  // Source/revision conflicts must remain inert, including for the fixed
+  // aspect-ratio fixture; invalid input cannot bypass strict operation checks.
+  const staleFixed = reduceEditDocument(fixedDocument, {
+    ...fixedColorRequest, expectedRevision: 41
+  });
+  const wrongFixedSource = reduceEditDocument(fixedDocument, {
+    ...fixedColorRequest,
+    expectedSource: { ...fixedIdentity, sha256: 'f'.repeat(64) }
+  });
+  for (const conflict of [staleFixed, wrongFixedSource]) {
+    assert.equal(conflict.status, 'conflict');
+    assert.strictEqual(conflict.document, fixedDocument);
+  }
+  assert.throws(() => reduceEditDocument(fixedDocument, {
+    ...fixedColorRequest, state: {
+      ...fixedColorRequest.state, crop: { ...writerCrop, aspectRatio: '7:11' }
+    }
+  }), TypeError);
+  assert.throws(() => reduceEditDocument(fixedDocument, {
+    ...fixedColorRequest, state: {
+      ...fixedColorRequest.state, crop: { ...writerCrop, width: Number.NaN }
+    }
+  }), TypeError);
+  assert.throws(() => normalizeEditOperation(fixedDocument, {
+    ...fixedColorRequest, state: {
+      ...fixedColorRequest.state, crop: { ...writerCrop, future: true }
+    }
+  }), /unknown or missing fields/);
+  assert.equal(digest(readFileSync(fixedPath)), fixedHash,
+    'all pure operations must leave the original V1 store unchanged');
+
   const invalidFreeCrop = (crop) => {
     const invalid = structuredClone(store);
     invalid.sessions[0].crop = { ...crop };
