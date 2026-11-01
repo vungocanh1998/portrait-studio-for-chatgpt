@@ -79,7 +79,14 @@ const SharedRenderer = (() => {
         Math.max(...medians) / Math.min(...medians) > 4)
       throw new RangeError('Eyedropper sample is mixed-edge or chromatically unreliable.');
     const neutral = (medians[0] * medians[1] * medians[2]) ** (1 / 3);
-    const gains = medians.map(value => clamp(neutral / value, 0.5, 2));
+    // Exact identity for an achromatic patch avoids floating-point noise
+    // triggering an otherwise unnecessary second RGBA8 quantization.
+    const gains = medians.every(value => value === medians[0])
+      ? [1, 1, 1]
+      : medians.map(value => {
+        const gain = clamp(neutral / value, 0.5, 2);
+        return Math.abs(gain - 1) <= Number.EPSILON * 4 ? 1 : gain;
+      });
     if (!gains.every(Number.isFinite))
       throw new RangeError('Eyedropper produced invalid gains.');
     return Object.freeze({
