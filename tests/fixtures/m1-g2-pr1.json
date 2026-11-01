@@ -1,0 +1,75 @@
+{
+  "id": "m1-g2-pr1-synthetic-baseline-v1",
+  "syntheticOnly": true,
+  "source": {
+    "width": 4,
+    "height": 3,
+    "rgba8": [
+      10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
+      130, 140, 150, 255, 160, 170, 180, 255, 190, 200, 210, 255, 220, 230, 240, 255,
+      5, 15, 25, 0, 35, 45, 55, 128, 65, 75, 85, 200, 95, 105, 115, 255
+    ],
+    "rgba8Sha256": "4c153f3fdc3579630e41ba702e54bd46a93d231d411cfbe42ea70407da499dae"
+  },
+  "crop": {
+    "selection": { "x": 25, "y": 0, "width": 50, "height": 66.6667 },
+    "bounds": { "x": 1, "y": 0, "width": 2, "height": 2 },
+    "rgba8": [
+      40, 50, 60, 255, 70, 80, 90, 255,
+      160, 170, 180, 255, 190, 200, 210, 255
+    ],
+    "rgba8Sha256": "a8c7ae5a9bd76a336dc26d9f451dd11b9c091cbaea096f0e0389bdaec240642a",
+    "legacyRgba8": [
+      56, 63, 71, 255, 92, 98, 107, 255,
+      198, 204, 213, 255, 233, 239, 248, 255
+    ],
+    "legacyRgba8Sha256": "99abc6f6f63184c59a1a0d31733e0a6febfa3add86d777060fb3de781341a514"
+  },
+  "legacy": {
+    "adjustments": {
+      "exposureEV": 0.3,
+      "contrast": 8,
+      "highlights": -20,
+      "shadows": 15,
+      "temperature": 22,
+      "tint": 2,
+      "vibrance": 8,
+      "saturation": 3
+    },
+    "rgba8": [
+      20, 27, 35, 255, 56, 63, 71, 255, 92, 98, 107, 255, 127, 134, 142, 255,
+      163, 169, 178, 255, 198, 204, 213, 255, 233, 239, 248, 255, 255, 255, 255, 255,
+      14, 21, 29, 0, 50, 57, 65, 128, 86, 92, 101, 200, 121, 128, 136, 255
+    ],
+    "rgba8Sha256": "77daf44216d3b982f81b6cdde1e90c57cc193949bf3e20abc3fc71470e770143"
+  },
+  "futureWhiteBalanceContract": {
+    "implemented": false,
+    "neutralInputSha256": "99abc6f6f63184c59a1a0d31733e0a6febfa3add86d777060fb3de781341a514",
+    "neutralOutputSha256": "99abc6f6f63184c59a1a0d31733e0a6febfa3add86d777060fb3de781341a514"
+  },
+  "futureRendererContract": {
+    "implemented": false,
+    "requiredIdentityFields": [
+      "rendererId",
+      "sourceSha256",
+      "revision",
+      "pipelineId",
+      "sourceBuildHash"
+    ],
+    "accepted": {
+      "rendererId": "synthetic-renderer-1",
+      "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "revision": 7,
+      "pipelineId": "synthetic-legacy-pipeline-v1",
+      "sourceBuildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "staleVariants": [
+      { "field": "rendererId", "value": "synthetic-renderer-2" },
+      { "field": "sourceSha256", "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+      { "field": "revision", "value": 8 },
+      { "field": "pipelineId", "value": "synthetic-legacy-pipeline-v2" },
+      { "field": "sourceBuildHash", "value": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }
+    ]
+  }
+}
