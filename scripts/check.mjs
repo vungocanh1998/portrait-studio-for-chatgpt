@@ -24,6 +24,7 @@ const syntaxFiles = [
   'tests/portrait-engine.mjs',
   'tests/safety-contract.mjs',
   'tests/cross-process-state.mjs',
+  'tests/windows-appdata-fallback.mjs',
   'tests/ui-host.mjs',
   'tests/version-consistency.mjs'
 ];
@@ -34,6 +35,7 @@ const testFiles = [
   'tests/portrait-engine.mjs',
   'tests/safety-contract.mjs',
   'tests/cross-process-state.mjs',
+  'tests/windows-appdata-fallback.mjs',
   'tests/version-consistency.mjs'
 ];
 
