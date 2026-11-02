@@ -222,6 +222,60 @@ function testCrossProcessEpoch() {
   assert.deepEqual(readFileSync(storePath), sourceBytes, 'session store must remain unchanged');
 }
 
+
+function testRendererCapacity() {
+  const directory = join(testRoot, 'renderer-capacity');
+  mkdirSync(directory);
+  const storePath = join(directory, 'sessions.json');
+  const original = Buffer.from('{"version":2,"sessions":[]}');
+  writeFileSync(storePath, original, { flag: 'wx' });
+  const identityAt = i => ({ ...identity, sessionId:
+    '00000000-0000-4000-8000-' + String(i + 1).padStart(12, '0') });
+  const existing = Array.from({ length: 20 }, (_, i) =>
+    registerRenderer({ storePath, ...identityAt(i) }));
+  const sidecar = storePath + '.renderer-epoch.json';
+  const bytes = readFileSync(sidecar);
+  const digest = sha256(bytes);
+  const entries = readdirSync(directory).sort();
+  expectCode(() => registerRenderer({ storePath, ...identityAt(20) }),
+    'renderer_capacity');
+  assert.deepEqual(readFileSync(sidecar), bytes);
+  assert.equal(sha256(readFileSync(sidecar)), digest);
+  assert.deepEqual(readdirSync(directory).sort(), entries);
+  for (const token of existing)
+    assert.equal(isCurrentRenderer({ storePath, token }), true);
+
+  const replacement = registerRenderer({ storePath, ...identityAt(6) });
+  assert.equal(replacement.epoch, existing[6].epoch + 1);
+  assert.equal(isCurrentRenderer({ storePath, token: existing[6] }), false);
+  assert.equal(isCurrentRenderer({ storePath, token: replacement }), true);
+  const before = JSON.parse(bytes.toString('utf8')).sessions;
+  const after = JSON.parse(readFileSync(sidecar, 'utf8')).sessions;
+  assert.equal(Object.keys(after).length, 20);
+  for (let i = 0; i < existing.length; i++) {
+    if (i === 6) continue;
+    assert.deepEqual(after[existing[i].sessionId], before[existing[i].sessionId]);
+    assert.equal(isCurrentRenderer({ storePath, token: existing[i] }), true);
+  }
+  assert.deepEqual(readFileSync(storePath), original);
+
+  const invalidDirectory = join(testRoot, 'renderer-overcapacity');
+  mkdirSync(invalidDirectory);
+  const invalidStore = join(invalidDirectory, 'sessions.json');
+  writeFileSync(invalidStore, original, { flag: 'wx' });
+  const invalidPath = invalidStore + '.renderer-epoch.json';
+  const overCapacity = JSON.parse(bytes.toString('utf8'));
+  overCapacity.sessions[identityAt(20).sessionId] = {
+    ...existing[0], sessionId: identityAt(20).sessionId
+  };
+  const malformedBytes = Buffer.from(JSON.stringify(overCapacity));
+  writeFileSync(invalidPath, malformedBytes, { flag: 'wx' });
+  expectCode(() => registerRenderer({ storePath: invalidStore, ...identityAt(0) }),
+    'renderer_capacity');
+  assert.deepEqual(readFileSync(invalidPath), malformedBytes);
+  assert.deepEqual(readFileSync(invalidStore), original);
+}
+
 try {
   mkdirSync(hostile);
   writeFileSync(sentinel, sentinelBytes, { flag: 'wx' });
@@ -229,6 +283,7 @@ try {
   testWhiteBalanceSampling();
   testDocumentHistory();
   testCrossProcessEpoch();
+  testRendererCapacity();
   assert.deepEqual(readFileSync(sentinel), sentinelBytes);
   assert.deepEqual(readdirSync(hostile), ['sentinel.bin']);
   assert.doesNotMatch(readFileSync(join(root, 'server/index.mjs'), 'utf8'), /renderer-authority|shared-renderer/);
