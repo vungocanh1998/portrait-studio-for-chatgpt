@@ -153,6 +153,11 @@ export function registerRenderer({ storePath, sessionId, sourceSha256, revision,
   validateToken(probe);
   return underLock(storePath, (state, path) => {
     const previous = state.sessions[sessionId];
+    // Preserve the strict 20-session read contract: never publish a
+    // 21st distinct session that would make every later read fail closed.
+    // Re-registering an existing session at capacity is still permitted.
+    if (!previous && Object.keys(state.sessions).length >= 20)
+      refuse('renderer_capacity', 'Renderer authority cannot exceed 20 distinct sessions.');
     if (previous && previous.epoch === Number.MAX_SAFE_INTEGER)
       refuse('renderer_epoch_overflow', 'Renderer epoch cannot increment.');
     const token = Object.freeze({ ...probe, epoch: previous ? previous.epoch + 1 : 1 });
