@@ -154,6 +154,24 @@ try {
   assert.throws(() => exportSessionBoundPng({
     ...request(), width: 3, height: 4
   }), /Invalid PR5 PNG/); // decode reject before touching the store
+  // Every field of the cross-process renderer identity is checked before
+  // writing output, not just the session and revision.
+  for (const [field, wrong] of [
+    ['sessionId', '11111111-1111-4111-8111-111111111111'],
+    ['sourceSha256', 'f'.repeat(64)],
+    ['revision', 2],
+    ['rendererId', '11111111-1111-4111-8111-111111111111'],
+    ['pipelineId', 'other-pipeline'],
+    ['sourceBuildHash', 'f'.repeat(64)],
+    ['epoch', token.epoch + 1]
+  ]) {
+    expectCode(() => exportSessionBoundPng({
+      ...request(), token: { ...token, [field]: wrong }
+    }), 'stale_renderer');
+  }
+  assert.throws(() => exportSessionBoundPng({
+    ...request(), pngBytes: corrupt
+  }), /Invalid PR5 PNG/);
   assertEmpty(outputDirectory);
 
   // Hold the shared renderer lock while a second process attempts a remount:
@@ -217,6 +235,34 @@ try {
   assert.deepEqual(readdirSync(outputDirectory).sort(), beforeEditFiles,
     'stale revision cannot create new output or provenance files');
   assert.equal(sessions.withStoreLock(() => sessions.getState(opened.sessionId)).export.status, 'stale');
+
+  // Crop/native-size output is exactly 2×2, never a resized 4×3 export.
+  const cropped = sessions.withStoreLock(() => sessions.setCrop(
+    opened.sessionId, 2, { x: 25, y: 0, width: 50, height: 66.6667, aspectRatio: 'free' }
+  ));
+  assert.equal(cropped.revision, 3);
+  token = registerRenderer({
+    storePath: sessionStorePath, ...rendererIdentity, revision: 3
+  });
+  const cropPreview = 'd'.repeat(64);
+  sessions.withStoreLock(() => sessions.confirmPreview(
+    opened.sessionId, 3, token.rendererId, sourceSha256, 2, 2, cropPreview,
+    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId }
+  ));
+  const cropRgba = Buffer.concat([rgba.subarray(4, 12), rgba.subarray(20, 28)]);
+  const cropPng = pngFixture(2, 2, cropRgba);
+  const native = exportSessionBoundPng({
+    ...request(), pngBytes: cropPng, width: 2, height: 2,
+    expectedPixelSha256: sha(cropRgba), expectedPreviewSha256: cropPreview
+  });
+  assert.equal(native.width, 2);
+  assert.equal(native.height, 2);
+  assert.equal(native.pixelSha256, sha(cropRgba));
+  assert.deepEqual(readFileSync(native.path), cropPng);
+  assert.equal(sessions.withStoreLock(() => sessions.getState(opened.sessionId)).export.status, 'saved');
+  assert.deepEqual(readFileSync(first.path), nativePng,
+    'new native crop export must not alter prior PNG files');
+  assert.deepEqual(readFileSync(first.provenancePath), sidecar);
 
   assert.deepEqual(readFileSync(hostileSentinel), sentinelBytes,
     'the inherited hostile data root must be unchanged');
