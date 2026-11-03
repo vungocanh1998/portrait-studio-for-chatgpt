@@ -175,6 +175,25 @@ export function isCurrentRenderer({ storePath, token }) {
   });
 }
 
+// PR5 code-only integration primitive: hold the SAME shared renderer lock
+// throughout a synchronous session-bound export transaction. The caller must
+// take the EditorSessions store lock first; registration only takes this lock.
+export function withCurrentRenderer({ storePath, token }, callback) {
+  validateToken(token);
+  if (typeof callback !== 'function')
+    refuse('invalid_renderer_transaction', 'A synchronous renderer transaction is required.');
+  const pinned = Object.freeze({ ...token });
+  return underLock(storePath, state => {
+    const current = state.sessions[pinned.sessionId];
+    if (!current || Object.keys(pinned).some(key => current[key] !== pinned[key]))
+      refuse('stale_renderer', 'The renderer registration is no longer current.');
+    const result = callback(pinned);
+    if (result && typeof result.then === 'function')
+      refuse('async_renderer_transaction', 'Renderer transactions must not yield while locked.');
+    return result;
+  });
+}
+
 export function assertCurrentRenderer(options) {
   if (!isCurrentRenderer(options))
     refuse('stale_renderer', 'The renderer registration is no longer current.');
