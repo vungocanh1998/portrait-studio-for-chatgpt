@@ -1,6 +1,6 @@
 # Repository structure
 
-This tree describes tracked public source on the V0.2.8 baseline plus merged PR1–PR3 and isolated PR4 source/tests. The PR4 modules are not loaded by the current PRIVATE runtime. It contains no image fixtures, session stores, credentials, local exports, or future placeholder engine directories.
+This tree describes tracked public source on the V0.2.8 baseline plus merged PR1–PR4 and isolated PR5 source/tests. New PR5 modules are not loaded by the current PRIVATE runtime. It contains no image fixtures, session stores, credentials, local exports, or future placeholder engine directories.
 
 ~~~text
 .
@@ -46,7 +46,9 @@ This tree describes tracked public source on the V0.2.8 baseline plus merged PR1
 │   ├── editor-state.mjs
 │   ├── index.mjs
 │   ├── offline-session-migration.mjs
-│   └── renderer-authority.mjs
+│   ├── png-integrity.mjs
+│   ├── renderer-authority.mjs
+│   └── session-bound-export.mjs
 ├── tests/
 │   ├── cross-process-state.mjs
 │   ├── editor-state.mjs
@@ -56,6 +58,7 @@ This tree describes tracked public source on the V0.2.8 baseline plus merged PR1
 │   ├── mcp-contract.mjs
 │   ├── offline-session-migration.mjs
 │   ├── shared-renderer.mjs
+│   ├── session-bound-export.mjs
 │   ├── portrait-engine.mjs
 │   ├── safety-contract.mjs
 │   ├── ui-host.mjs
@@ -75,7 +78,7 @@ This tree describes tracked public source on the V0.2.8 baseline plus merged PR1
 - ui/ contains the MCP App editor and deterministic image engine.
 - tests/ contains dependency-free source checks and the local synthetic browser harness.
 - scripts/check.mjs runs the syntax and regression checks shared by `npm run check` and CI; scripts/preview.mjs serves the editor for local preview.
-- .github/workflows/ci.yml runs `npm run check` on Windows Node.js 24 and a separate POSIX migration suite on Ubuntu Node.js 24.
+- .github/workflows/ci.yml runs `npm run check` on Windows Node.js 24 and separate POSIX migration plus synthetic PR5 export/provenance suites on Ubuntu Node.js 24.
 - docs/ records current architecture, planned milestones, quality safeguards, acceptance, testing, and version policy.
 - legacy/affinity/ preserves archived material and is not the active editing engine.
 
