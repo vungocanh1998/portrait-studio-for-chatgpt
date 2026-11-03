@@ -151,9 +151,9 @@ try {
   expectCode(() => exportSessionBoundPng({
     ...request(), expectedPreviewSha256: 'a'.repeat(64)
   }), 'export_provenance_conflict');
-  expectCode(() => exportSessionBoundPng({
+  assert.throws(() => exportSessionBoundPng({
     ...request(), width: 3, height: 4
-  }), undefined); // inspectPng throws TypeError before touching the store
+  }), /Invalid PR5 PNG/); // decode reject before touching the store
   assertEmpty(outputDirectory);
 
   // Hold the shared renderer lock while a second process attempts a remount:
@@ -162,7 +162,7 @@ try {
     storePath: sessionStorePath, token
   }, () => {
     assert.equal(childRegister(sessionStorePath, rendererIdentity, 'renderer_authority_busy'), undefined);
-    assert.equal(isCurrentRenderer, isCurrentRenderer); // sync test; no unguarded await
+    // The epoch lock remains held through the synchronous callback.
   }));
   assert.equal(isCurrentRenderer({ storePath: sessionStorePath, token }), true);
 
