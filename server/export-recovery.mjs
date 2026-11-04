@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   closeSync, constants, existsSync, fstatSync, lstatSync, openSync,
-  readSync, readdirSync, realpathSync, statSync
+  readSync, readdirSync, realpathSync
 } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { readV1Store } from './edit-document.mjs';
@@ -21,6 +21,7 @@ const provenanceKeys = [
 ];
 const maxStoreBytes = 8 * 1024 * 1024;
 const maxPngBytes = 256 * 1024 * 1024;
+const maxTotalPngBytes = 512 * 1024 * 1024;
 const maxProvenanceBytes = 16 * 1024;
 const maxEntries = 10000;
 const maxPairs = 1000;
@@ -74,7 +75,10 @@ function safeRead(path, limit) {
     if (!before.isFile() || before.isSymbolicLink() || before.ino === 0n ||
         before.size > BigInt(limit))
       reject('recovery_unsafe_file');
-    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+    // O_NONBLOCK prevents a regular-file-to-FIFO swap from hanging openSync
+    // before the post-open fstat can reject a nonregular entry.
+    descriptor = openSync(path, constants.O_RDONLY |
+      (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
     const held = fstatSync(descriptor, { bigint: true });
     if (!held.isFile() || !sameIdentity(before, held))
       reject('recovery_unsafe_file');
@@ -174,8 +178,19 @@ export function inspectExportRecovery({ storePath, outputDirectory } = {}) {
       else reject('recovery_unsafe_entry');
     }
     if (groups.size > maxPairs) reject('recovery_too_many_pairs');
+    let inspectedPngBytes = 0;
     for (const [fileName, files] of [...groups].sort((a, b) => a[0].localeCompare(b[0]))) {
       const path = join(outputDirectory, fileName);
+      if (files.png) {
+        // Bound aggregate scan cost; safeRead rechecks FD identity and size.
+        let size;
+        try { size = lstatSync(path, { bigint: true }).size; }
+        catch { reject('recovery_unsafe_file'); }
+        inspectedPngBytes += Number(size);
+        if (!Number.isSafeInteger(inspectedPngBytes) ||
+            inspectedPngBytes > maxTotalPngBytes)
+          reject('recovery_scan_budget_exceeded');
+      }
       if (!files.png || !files.proof) {
         descriptors.push(Object.freeze({ fileName, status: 'incomplete_pair' }));
         continue;
