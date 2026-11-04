@@ -170,6 +170,17 @@ try {
   assert.notEqual(inventory.counts.recorded_verified, 1);
   renameSync(movedFile, join(outputDirectory, pngName));
 
+  const recordedPngMoved = join(root, 'missing-png');
+  const recordedProofMoved = join(root, 'missing-proof');
+  renameSync(join(outputDirectory, pngName), recordedPngMoved);
+  renameSync(join(outputDirectory, pngName + '.provenance.json'), recordedProofMoved);
+  inventory = inspectExportRecovery({ storePath, outputDirectory });
+  assert.equal(find(inventory, pngName).status, 'recorded_missing_pair',
+    'recorded path without either output must be reported, never silently fixed');
+  assert.equal(inventory.counts.recorded_missing_pair, 1);
+  renameSync(recordedPngMoved, join(outputDirectory, pngName));
+  renameSync(recordedProofMoved, join(outputDirectory, pngName + '.provenance.json'));
+
   const noPairOut = join(root, 'missing-recorded');
   mkdirSync(noPairOut);
   // Record path belongs to the first output directory, so this *other*
