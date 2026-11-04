@@ -30,3 +30,4 @@ jobs:
           node-version: 24
       - run: node tests/offline-session-migration.mjs
       - run: node tests/session-bound-export.mjs
+      - run: node tests/export-recovery.mjs
