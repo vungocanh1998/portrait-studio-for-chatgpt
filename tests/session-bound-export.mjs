@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync
+  closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync,
+  readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -12,7 +12,7 @@ import { deflateSync } from 'node:zlib';
 import { EditorSessions } from '../server/editor-state.mjs';
 import { readV1Store } from '../server/edit-document.mjs';
 import { inspectPng } from '../server/png-integrity.mjs';
-import { exportSessionBoundPng } from '../server/session-bound-export.mjs';
+import { exportSessionBoundPng, __testExportSessionBoundPngAfterWorker } from '../server/session-bound-export.mjs';
 import {
   registerRenderer, isCurrentRenderer, withCurrentRenderer
 } from '../server/renderer-authority.mjs';
@@ -307,6 +307,31 @@ try {
   }), /Invalid PR5 PNG/);
   assertEmpty(outputDirectory);
 
+  // Crash-boundary simulation: the worker has committed PNG + provenance but
+  // the parent has not recorded the export in the V1 session store. Such
+  // files are explicitly treated as ORPHANS, not as successful exports.
+  // This does not claim automated crash recovery or atomic multi-file commit.
+  const orphanDirectory = join(scratch, 'unrecorded-output');
+  mkdirSync(orphanDirectory);
+  const orphanDirectoryFd = openSync(orphanDirectory, 'r');
+  const orphanDirectoryStat = fstatSync(orphanDirectoryFd, { bigint: true });
+  const orphanWorker = startOutputWorker(orphanDirectory, orphanDirectoryFd, {
+    ...preSpawnHeader, operation: 'write', safeName: 'unrecorded-export',
+    directory: orphanDirectory,
+    directoryIdentity: { dev: String(orphanDirectoryStat.dev), ino: String(orphanDirectoryStat.ino) }
+  });
+  const storeBeforeOrphan = readFileSync(sessionStorePath);
+  orphanWorker.child.stdin.end(nativePng);
+  assert.equal(await orphanWorker.closed, 0, orphanWorker.stderr);
+  const stagedOrphan = outputWorkerResult(orphanWorker);
+  assert.equal(stagedOrphan.ok, true);
+  assert.deepEqual(readFileSync(join(orphanDirectory, stagedOrphan.fileName)), nativePng);
+  assert.deepEqual(JSON.parse(readFileSync(join(orphanDirectory, stagedOrphan.fileName + '.provenance.json'), 'utf8')).pngSha256, baselinePngSha);
+  assert.deepEqual(readFileSync(sessionStorePath), storeBeforeOrphan,
+    'a completed worker without V1 recordExport must never announce a saved session');
+  assert.equal(sessions.withStoreLock(() => sessions.getState(opened.sessionId)).export.status, 'none');
+  closeSync(orphanDirectoryFd);
+
   // Hold the shared renderer lock while a second process attempts a remount:
   // a new renderer must not supersede a prepared/committing PNG mid-export.
   sessions.withStoreLock(() => withCurrentRenderer({
@@ -408,6 +433,74 @@ try {
   }), 'export_provenance_conflict');
   assert.deepEqual(readdirSync(outputDirectory).sort(), filesBeforeUnboundPreview,
     'preview without the separate native pixel binding cannot export');
+
+  // Reproduce the exact R2 residual: the output worker returns success and
+  // the original output pathname is then swapped before parent recordExport.
+  sessions.withStoreLock(() => sessions.confirmPreview(
+    opened.sessionId, 3, token.rendererId, sourceSha256, 2, 2, cropPreview,
+    { ...runtimeConfirmation(token.rendererId), nativePixelSha256: sha(cropRgba) }
+  ));
+  const postWorkerParent = join(scratch, 'post-worker-race');
+  const postWorkerDirectory = join(postWorkerParent, 'original');
+  const postWorkerMoved = join(postWorkerParent, 'moved');
+  const postWorkerReplacement = join(postWorkerParent, 'replacement');
+  const postWorkerSentinel = join(postWorkerReplacement, 'sentinel.txt');
+  mkdirSync(postWorkerParent);
+  mkdirSync(postWorkerDirectory);
+  mkdirSync(postWorkerReplacement);
+  writeFileSync(postWorkerSentinel, sentinelBytes, { flag: 'wx' });
+  const storeBeforePostWorker = readFileSync(sessionStorePath);
+  const raceRequest = { ...request(), outputDirectory: postWorkerDirectory,
+    pngBytes: cropPng, width: 2, height: 2, expectedPreviewSha256: cropPreview };
+  if (process.platform === 'win32') {
+    // The existing open-directory handle generally disallows rename on
+    // Windows. Exercise abort/owned-file cleanup without falsifying a swap.
+    expectCode(() => __testExportSessionBoundPngAfterWorker(raceRequest, () => {
+      throw Object.assign(new Error('Synthetic abort at worker/record boundary.'), { code: 'synthetic_abort' });
+    }), 'synthetic_abort');
+    assertEmpty(postWorkerDirectory);
+  } else {
+    expectCode(() => __testExportSessionBoundPngAfterWorker(raceRequest, () => {
+      renameSync(postWorkerDirectory, postWorkerMoved);
+      symlinkSync(postWorkerReplacement, postWorkerDirectory, 'dir');
+    }), 'export_directory_changed');
+    assert.equal(readdirSync(postWorkerMoved).length, 2,
+      'output created in pinned original dir may be orphaned, never redirected to replacement');
+    assert.deepEqual(readdirSync(postWorkerReplacement), ['sentinel.txt']);
+
+    // R2 regression for the alias that bypassed the R1 statSync-only check:
+    // a symlink resolves to the SAME moved output directory, so the followed
+    // pathname AND its just-written PNG/provenance keep identical inode IDs.
+    // Canonical-path/lstat checks must still fail before V1 recordExport.
+    const aliasDirectory = join(postWorkerParent, 'alias-original');
+    const aliasMoved = join(postWorkerParent, 'alias-moved');
+    mkdirSync(aliasDirectory);
+    const storeBeforeAlias = readFileSync(sessionStorePath);
+    expectCode(() => __testExportSessionBoundPngAfterWorker({
+      ...raceRequest, outputDirectory: aliasDirectory
+    }, () => {
+      renameSync(aliasDirectory, aliasMoved);
+      symlinkSync(aliasMoved, aliasDirectory, 'dir');
+      assert.equal(lstatSync(aliasDirectory).isSymbolicLink(), true);
+      const followed = statSync(aliasDirectory, { bigint: true });
+      const original = statSync(aliasMoved, { bigint: true });
+      assert.equal(followed.dev, original.dev);
+      assert.equal(followed.ino, original.ino,
+        'the old statSync-only guard would have accepted this alias');
+      assert.equal(readdirSync(aliasDirectory).length, 2,
+        'symlink alias must expose both original worker outputs');
+    }), 'export_directory_changed');
+    assert.equal(readdirSync(aliasMoved).length, 2,
+      'owned output may remain orphaned in the moved directory, not published as saved');
+    assert.deepEqual(readFileSync(sessionStorePath), storeBeforeAlias,
+      'symlink alias to original output directory must never mutate V1 session bytes');
+    assert.deepEqual(readdirSync(postWorkerReplacement), ['sentinel.txt'],
+      'the unrelated replacement directory remains untouched');
+  }
+  assert.deepEqual(readFileSync(sessionStorePath), storeBeforePostWorker,
+    'post-worker path replacement must not persist a stale absolute export path');
+  assert.deepEqual(readFileSync(postWorkerSentinel), sentinelBytes);
+  assert.doesNotThrow(() => readV1Store(readFileSync(sessionStorePath)));
 
   assert.deepEqual(readFileSync(hostileSentinel), sentinelBytes,
     'the inherited hostile data root must be unchanged');
