@@ -21,6 +21,7 @@ function refuse(code, message) {
 }
 
 function requireCanonicalDirectory(path) {
+  // shortcut: Node path APIs cannot pin this directory across writes; require native handle-relative creation before enabling adversarial destinations.
   if (typeof path !== 'string' || !isAbsolute(path) ||
       realpathSync(path) !== resolve(path))
     refuse('invalid_export_directory', 'An existing canonical absolute output directory is required.');
@@ -44,23 +45,16 @@ function newFile(path, bytes) {
   }
 }
 
-function failClosedPngValidation(bytes, expectedWidth, expectedHeight, expectedPixelSha256) {
-  const actual = inspectPng(bytes, expectedWidth, expectedHeight);
-  if (actual.pixelSha256 !== expectedPixelSha256)
-    refuse('export_pixels_mismatch', 'Decoded PNG pixels do not match the renderer output hash.');
-  return actual;
-}
-
 function validateInput(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options) ||
       Object.keys(options).some(key => ![
         'sessions', 'storePath', 'token', 'pngBytes', 'width', 'height',
-        'expectedPixelSha256', 'expectedPreviewSha256', 'outputDirectory',
+        'expectedPreviewSha256', 'outputDirectory',
         'baseName'
       ].includes(key)))
     refuse('invalid_export_request', 'Unknown or missing PR5 export request fields.');
   const { sessions, storePath, token, pngBytes, width, height,
-    expectedPixelSha256, expectedPreviewSha256, outputDirectory, baseName } = options;
+    expectedPreviewSha256, outputDirectory, baseName } = options;
   if (!(sessions instanceof EditorSessions) ||
       typeof storePath !== 'string' || !isAbsolute(storePath) ||
       resolve(storePath) !== resolve(sessions.filePath) ||
@@ -69,7 +63,6 @@ function validateInput(options) {
       pngBytes.length > maxExportBytes ||
       !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
       width < 1 || height < 1 || width * height > 80_000_000 ||
-      typeof expectedPixelSha256 !== 'string' || !hashPattern.test(expectedPixelSha256) ||
       typeof expectedPreviewSha256 !== 'string' || !hashPattern.test(expectedPreviewSha256) ||
       typeof baseName !== 'string' || !baseName.length || baseName.length > 200)
     refuse('invalid_export_request', 'Invalid session, size, renderer or SHA-256 binding.');
@@ -85,12 +78,12 @@ function validateInput(options) {
 export function exportSessionBoundPng(options) {
   const { directory, safeName } = validateInput(options);
   const { sessions, storePath, token, width, height,
-    expectedPreviewSha256, expectedPixelSha256 } = options;
+    expectedPreviewSha256 } = options;
 
   // Copy the caller-provided PNG so asynchronous UI mutations after this call
   // cannot change bytes that were verified but not yet persisted.
   const bytes = Buffer.from(options.pngBytes);
-  const preflight = failClosedPngValidation(bytes, width, height, expectedPixelSha256);
+  const preflight = inspectPng(bytes, width, height);
   if (createHash('sha256').update(bytes).digest('hex') !== preflight.sha256)
     refuse('export_png_hash_mismatch', 'The PNG bytes changed during validation.');
 
@@ -106,6 +99,7 @@ export function exportSessionBoundPng(options) {
         state.preview.revision !== current.revision ||
         state.preview.rendererId !== current.rendererId ||
         state.preview.sha256 !== expectedPreviewSha256 ||
+        state.preview.confirmedBy?.nativePixelSha256 !== preflight.pixelSha256 ||
         state.preview.confirmedBy?.sourceBuildHash !== current.sourceBuildHash)
       refuse('export_provenance_conflict',
         'Preview, source, revision, renderer or source build is stale or unconfirmed.');
@@ -150,8 +144,9 @@ export function exportSessionBoundPng(options) {
       if (!written.equals(bytes) ||
           !readFileSync(provenancePath).equals(recordBytes))
         refuse('export_readback_mismatch', 'PNG or provenance readback did not match source bytes.');
-      const readback = failClosedPngValidation(written, width, height, expectedPixelSha256);
-      if (readback.sha256 !== preflight.sha256 || written.length !== bytes.length)
+      const readback = inspectPng(written, width, height);
+      if (readback.sha256 !== preflight.sha256 ||
+          readback.pixelSha256 !== preflight.pixelSha256 || written.length !== bytes.length)
         refuse('export_png_hash_mismatch', 'PNG readback failed byte integrity.');
       // This is the original V1-compatible export record. No new fields are
       // written into the PRIVATE-compatible V1 sessions.json schema.

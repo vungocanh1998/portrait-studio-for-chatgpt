@@ -136,18 +136,22 @@ try {
   let token = registerRenderer({ storePath: sessionStorePath, ...rendererIdentity });
   sessions.withStoreLock(() => sessions.confirmPreview(
     opened.sessionId, 1, token.rendererId, sourceSha256, 4, 3, previewSha256,
-    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId }
+    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId,
+      nativePixelSha256: pixelSha256 }
   ));
   const request = () => ({
     sessions, storePath: sessionStorePath, token,
     pngBytes: nativePng, width: 4, height: 3,
-    expectedPixelSha256: pixelSha256, expectedPreviewSha256: previewSha256,
+    expectedPreviewSha256: previewSha256,
     outputDirectory, baseName: 'synthetic-portrait.png'
   });
 
+  const unrelatedRgba = Buffer.from(rgba);
+  unrelatedRgba[0] ^= 1;
+  const unrelatedPng = pngFixture(4, 3, unrelatedRgba);
   expectCode(() => exportSessionBoundPng({
-    ...request(), expectedPixelSha256: '0'.repeat(64)
-  }), 'export_pixels_mismatch');
+    ...request(), pngBytes: unrelatedPng
+  }), 'export_provenance_conflict');
   expectCode(() => exportSessionBoundPng({
     ...request(), expectedPreviewSha256: 'a'.repeat(64)
   }), 'export_provenance_conflict');
@@ -222,7 +226,8 @@ try {
   expectCode(() => exportSessionBoundPng(request()), 'export_provenance_conflict');
   sessions.withStoreLock(() => sessions.confirmPreview(
     opened.sessionId, 1, token.rendererId, sourceSha256, 4, 3, previewSha256,
-    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId }
+    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId,
+      nativePixelSha256: pixelSha256 }
   ));
   const third = exportSessionBoundPng(request());
   assert.equal(third.provenance.rendererEpoch, 2);
@@ -245,15 +250,16 @@ try {
     storePath: sessionStorePath, ...rendererIdentity, revision: 3
   });
   const cropPreview = 'd'.repeat(64);
+  const cropRgba = Buffer.concat([rgba.subarray(4, 12), rgba.subarray(20, 28)]);
   sessions.withStoreLock(() => sessions.confirmPreview(
     opened.sessionId, 3, token.rendererId, sourceSha256, 2, 2, cropPreview,
-    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId }
+    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId,
+      nativePixelSha256: sha(cropRgba) }
   ));
-  const cropRgba = Buffer.concat([rgba.subarray(4, 12), rgba.subarray(20, 28)]);
   const cropPng = pngFixture(2, 2, cropRgba);
   const native = exportSessionBoundPng({
     ...request(), pngBytes: cropPng, width: 2, height: 2,
-    expectedPixelSha256: sha(cropRgba), expectedPreviewSha256: cropPreview
+    expectedPreviewSha256: cropPreview
   });
   assert.equal(native.width, 2);
   assert.equal(native.height, 2);
