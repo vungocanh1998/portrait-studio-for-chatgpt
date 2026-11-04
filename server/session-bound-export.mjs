@@ -33,8 +33,13 @@ function identityOf(stat) {
 }
 
 function samePathDirectory(path, identity) {
-  try { return sameIdentity(statSync(path, { bigint: true }), identity); }
-  catch { return false; }
+  try {
+    // Preserve the initial canonical-path contract when the output pathname
+    // is rechecked after a worker returns. statSync alone follows a symlink
+    // back into a renamed original directory and can match its old inode.
+    return realpathSync(path) === resolve(path) &&
+      sameIdentity(lstatSync(path, { bigint: true }), identity);
+  } catch { return false; }
 }
 
 function requireCanonicalDirectory(path) {
