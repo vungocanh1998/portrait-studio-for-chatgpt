@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync
+  closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync,
+  readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -467,6 +467,35 @@ try {
     assert.equal(readdirSync(postWorkerMoved).length, 2,
       'output created in pinned original dir may be orphaned, never redirected to replacement');
     assert.deepEqual(readdirSync(postWorkerReplacement), ['sentinel.txt']);
+
+    // R2 regression for the alias that bypassed the R1 statSync-only check:
+    // a symlink resolves to the SAME moved output directory, so the followed
+    // pathname AND its just-written PNG/provenance keep identical inode IDs.
+    // Canonical-path/lstat checks must still fail before V1 recordExport.
+    const aliasDirectory = join(postWorkerParent, 'alias-original');
+    const aliasMoved = join(postWorkerParent, 'alias-moved');
+    mkdirSync(aliasDirectory);
+    const storeBeforeAlias = readFileSync(sessionStorePath);
+    expectCode(() => __testExportSessionBoundPngAfterWorker({
+      ...raceRequest, outputDirectory: aliasDirectory
+    }, () => {
+      renameSync(aliasDirectory, aliasMoved);
+      symlinkSync(aliasMoved, aliasDirectory, 'dir');
+      assert.equal(lstatSync(aliasDirectory).isSymbolicLink(), true);
+      const followed = statSync(aliasDirectory, { bigint: true });
+      const original = statSync(aliasMoved, { bigint: true });
+      assert.equal(followed.dev, original.dev);
+      assert.equal(followed.ino, original.ino,
+        'the old statSync-only guard would have accepted this alias');
+      assert.equal(readdirSync(aliasDirectory).length, 2,
+        'symlink alias must expose both original worker outputs');
+    }), 'export_directory_changed');
+    assert.equal(readdirSync(aliasMoved).length, 2,
+      'owned output may remain orphaned in the moved directory, not published as saved');
+    assert.deepEqual(readFileSync(sessionStorePath), storeBeforeAlias,
+      'symlink alias to original output directory must never mutate V1 session bytes');
+    assert.deepEqual(readdirSync(postWorkerReplacement), ['sentinel.txt'],
+      'the unrelated replacement directory remains untouched');
   }
   assert.deepEqual(readFileSync(sessionStorePath), storeBeforePostWorker,
     'post-worker path replacement must not persist a stale absolute export path');
