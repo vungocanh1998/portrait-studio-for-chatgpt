@@ -118,6 +118,7 @@ export class EditorSessions {
     this.id = id;
     this.instanceId = instanceId;
     this.sessions = this.load();
+    this.previewPixelBindings = new Map();
     this.lastWriteDurability = null;
   }
 
@@ -486,9 +487,32 @@ export class EditorSessions {
     const expectedHeight = Math.max(1, Math.round(crop.height * scale));
     if (width !== expectedWidth || height !== expectedHeight)
       throw new EditorSessionError('invalid_preview_dimensions', 'Preview dimensions do not match the current crop.');
-    state.preview = { revision: state.revision, rendererId, width, height, sha256: sha256.toLowerCase(), confirmedBy: clone(confirmedBy) };
+    this.previewPixelBindings.delete(sessionId);
+    const nativePixelSha256 = typeof confirmedBy?.nativePixelSha256 === 'string' && hashPattern.test(confirmedBy.nativePixelSha256)
+      ? confirmedBy.nativePixelSha256.toLowerCase() : null;
+    const persistedConfirmation = confirmedBy && typeof confirmedBy === 'object'
+      ? { ...confirmedBy } : confirmedBy;
+    if (persistedConfirmation && typeof persistedConfirmation === 'object')
+      delete persistedConfirmation.nativePixelSha256;
+    state.preview = { revision: state.revision, rendererId, width, height, sha256: sha256.toLowerCase(), confirmedBy: clone(persistedConfirmation) };
     this.persist();
+    if (nativePixelSha256)
+      this.previewPixelBindings.set(sessionId, {
+        revision: state.revision, rendererId, sourceSha256: state.source.sha256,
+        previewSha256: state.preview.sha256, width, height, pixelSha256: nativePixelSha256
+      });
     return snapshot(state);
+  }
+
+  getConfirmedPreviewPixelSha256(sessionId) {
+    const state = this.requireSession(sessionId);
+    const binding = this.previewPixelBindings.get(sessionId);
+    if (!binding || state.preview?.revision !== binding.revision ||
+        state.preview.rendererId !== binding.rendererId || state.preview.sha256 !== binding.previewSha256 ||
+        state.preview.width !== binding.width || state.preview.height !== binding.height ||
+        state.source?.sha256 !== binding.sourceSha256 || state.revision !== binding.revision)
+      return null;
+    return binding.pixelSha256;
   }
 
   prepareExport(sessionId, expectedRevision, rendererId, width, height) {

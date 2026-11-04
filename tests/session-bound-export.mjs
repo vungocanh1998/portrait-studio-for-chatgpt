@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  rmSync, writeFileSync
+  closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync,
+  readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { deflateSync } from 'node:zlib';
 import { EditorSessions } from '../server/editor-state.mjs';
+import { readV1Store } from '../server/edit-document.mjs';
 import { inspectPng } from '../server/png-integrity.mjs';
 import { exportSessionBoundPng } from '../server/session-bound-export.mjs';
 import {
@@ -98,6 +99,64 @@ function childRegister(storePath, inputs, expected = 'success') {
   return value.token;
 }
 
+function startOutputWorker(directory, directoryFd, header) {
+  const child = spawn(process.execPath, [
+    join(root, 'server/session-bound-export.mjs'), '--pr5-output-worker',
+    Buffer.from(JSON.stringify(header)).toString('base64')
+  ], {
+    cwd: directory,
+    stdio: ['pipe', 'pipe', 'pipe', directoryFd],
+    env: process.platform === 'win32'
+      ? { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR }
+      : {},
+    windowsHide: true
+  });
+  let stdout = '', stderr = '', announceReady, announceFilesReady;
+  const ready = new Promise(resolve => { announceReady = resolve; });
+  const filesReady = new Promise(resolve => { announceFilesReady = resolve; });
+  const closed = new Promise(resolve => child.once('close', resolve));
+  child.stdout.on('data', chunk => {
+    stdout += chunk.toString('utf8');
+    if (stdout.includes('READY\n'))
+      announceReady();
+    if (stdout.includes('FILES_READY\n'))
+      announceFilesReady();
+  });
+  child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+  child.stdin.on('error', () => {});
+  return { child, ready, filesReady, closed, get stdout() { return stdout; }, get stderr() { return stderr; } };
+}
+
+async function waitForOutputWorker(worker, signal = 'ready') {
+  let timer;
+  try {
+    await Promise.race([
+      worker[signal],
+      worker.closed.then(code => { throw new Error('Output worker exited before ' + signal + ': ' + code + ' ' + worker.stderr + ' ' + worker.stdout); }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Output worker timed out before ' + signal + ': ' + worker.stderr + ' ' + worker.stdout)), 5000); })
+    ]);
+  } catch (error) {
+    worker.child.kill();
+    await worker.closed;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function outputWorkerResult(worker) {
+  return JSON.parse(worker.stdout.trim().split(/\r?\n/).at(-1));
+}
+
+function runtimeConfirmation(rendererId) {
+  return {
+    serverVersion: '0.2.8', sourceBuildHash, pid: process.pid,
+    instanceId: rendererId, executablePath: process.execPath,
+    scriptPath: fileURLToPath(import.meta.url), pluginRoot: root,
+    sessionStorePath, confirmedAt: new Date().toISOString()
+  };
+}
+
 try {
   mkdirSync(dataRoot);
   mkdirSync(outputDirectory);
@@ -122,6 +181,73 @@ try {
   assert.throws(() => inspectPng(nativePng.subarray(0, -1), 4, 3), /Invalid PR5 PNG/);
   assert.equal(sha(nativePng), baselinePngSha, 'PNG input bytes must remain untouched');
 
+  const swapParent = join(scratch, 'directory-swap');
+  const preSpawnDirectory = join(swapParent, 'pre-spawn');
+  const preSpawnMoved = join(swapParent, 'pre-spawn-moved');
+  const replacementDirectory = join(swapParent, 'replacement');
+  const replacementSentinel = join(replacementDirectory, 'sentinel.txt');
+  mkdirSync(swapParent);
+  mkdirSync(preSpawnDirectory);
+  mkdirSync(replacementDirectory);
+  writeFileSync(replacementSentinel, sentinelBytes, { flag: 'wx' });
+  const preSpawnFd = openSync(preSpawnDirectory, 'r');
+  const preSpawnIdentity = fstatSync(preSpawnFd, { bigint: true });
+  const preSpawnHeader = {
+    directory: preSpawnDirectory,
+    directoryIdentity: { dev: String(preSpawnIdentity.dev), ino: String(preSpawnIdentity.ino) },
+    safeName: 'pre-spawn-swap', width: 4, height: 3,
+    bytes: nativePng.length, pngSha256: baselinePngSha, pixelSha256,
+    provenance: { schemaVersion: 1, sessionId: 'synthetic-session', revision: 1 }
+  };
+  renameSync(preSpawnDirectory, preSpawnMoved);
+  if (process.platform === 'win32')
+    mkdirSync(preSpawnDirectory);
+  else
+    symlinkSync(replacementDirectory, preSpawnDirectory, 'dir');
+  const preSpawnWorker = startOutputWorker(preSpawnDirectory, preSpawnFd, preSpawnHeader);
+  preSpawnWorker.child.stdin.end();
+  const preSpawnCode = await preSpawnWorker.closed;
+  assert.equal(preSpawnCode, 0, preSpawnWorker.stderr);
+  assert.deepEqual(outputWorkerResult(preSpawnWorker), { ok: false, code: 'export_directory_changed' });
+  assertEmpty(preSpawnMoved);
+  assert.deepEqual(readdirSync(replacementDirectory), ['sentinel.txt']);
+  assert.deepEqual(readFileSync(replacementSentinel), sentinelBytes);
+  closeSync(preSpawnFd);
+
+  const liveDirectory = join(swapParent, 'during-worker');
+  const liveMoved = join(swapParent, 'during-worker-moved');
+  mkdirSync(liveDirectory);
+  const liveFd = openSync(liveDirectory, 'r');
+  const liveIdentity = fstatSync(liveFd, { bigint: true });
+  const liveWorker = startOutputWorker(liveDirectory, liveFd, {
+    ...preSpawnHeader,
+    directory: liveDirectory,
+    directoryIdentity: { dev: String(liveIdentity.dev), ino: String(liveIdentity.ino) },
+    operation: 'write', safeName: 'during-worker-swap', pauseBeforeCommit: true
+  });
+  liveWorker.child.stdin.write(nativePng);
+  await waitForOutputWorker(liveWorker, 'filesReady');
+  if (process.platform === 'win32') {
+    assert.throws(() => renameSync(liveDirectory, liveMoved), error =>
+      ['EBUSY', 'EPERM', 'EACCES'].includes(error?.code));
+    liveWorker.child.stdin.end(Buffer.from([1]));
+    assert.equal(await liveWorker.closed, 0, liveWorker.stderr);
+    const liveResult = outputWorkerResult(liveWorker);
+    assert.equal(liveResult.ok, true);
+    assert.deepEqual(readFileSync(join(liveDirectory, liveResult.fileName)), nativePng);
+    assert.deepEqual(readdirSync(replacementDirectory), ['sentinel.txt']);
+  } else {
+    renameSync(liveDirectory, liveMoved);
+    symlinkSync(replacementDirectory, liveDirectory, 'dir');
+    liveWorker.child.stdin.end(Buffer.from([1]));
+    assert.equal(await liveWorker.closed, 0, liveWorker.stderr);
+    assert.deepEqual(outputWorkerResult(liveWorker), { ok: false, code: 'export_directory_changed' });
+    assertEmpty(liveMoved);
+    assert.deepEqual(readdirSync(replacementDirectory), ['sentinel.txt']);
+    assert.deepEqual(readFileSync(replacementSentinel), sentinelBytes);
+  }
+  closeSync(liveFd);
+
   const sessions = new EditorSessions({ filePath: sessionStorePath });
   const opened = sessions.withStoreLock(() => sessions.create());
   const bound = sessions.withStoreLock(() => sessions.bindSource(opened.sessionId, 0, {
@@ -136,9 +262,12 @@ try {
   let token = registerRenderer({ storePath: sessionStorePath, ...rendererIdentity });
   sessions.withStoreLock(() => sessions.confirmPreview(
     opened.sessionId, 1, token.rendererId, sourceSha256, 4, 3, previewSha256,
-    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId,
-      nativePixelSha256: pixelSha256 }
+    { ...runtimeConfirmation(token.rendererId), nativePixelSha256: pixelSha256 }
   ));
+  const persistedConfirmation = JSON.parse(readFileSync(sessionStorePath, 'utf8'))
+    .sessions.find(session => session.sessionId === opened.sessionId).preview.confirmedBy;
+  assert.equal(Object.hasOwn(persistedConfirmation, 'nativePixelSha256'), false);
+  assert.doesNotThrow(() => readV1Store(readFileSync(sessionStorePath)));
   const request = () => ({
     sessions, storePath: sessionStorePath, token,
     pngBytes: nativePng, width: 4, height: 3,
@@ -226,8 +355,7 @@ try {
   expectCode(() => exportSessionBoundPng(request()), 'export_provenance_conflict');
   sessions.withStoreLock(() => sessions.confirmPreview(
     opened.sessionId, 1, token.rendererId, sourceSha256, 4, 3, previewSha256,
-    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId,
-      nativePixelSha256: pixelSha256 }
+    { ...runtimeConfirmation(token.rendererId), nativePixelSha256: pixelSha256 }
   ));
   const third = exportSessionBoundPng(request());
   assert.equal(third.provenance.rendererEpoch, 2);
@@ -253,8 +381,7 @@ try {
   const cropRgba = Buffer.concat([rgba.subarray(4, 12), rgba.subarray(20, 28)]);
   sessions.withStoreLock(() => sessions.confirmPreview(
     opened.sessionId, 3, token.rendererId, sourceSha256, 2, 2, cropPreview,
-    { sourceBuildHash, serverVersion: '0.2.8', instanceId: token.rendererId,
-      nativePixelSha256: sha(cropRgba) }
+    { ...runtimeConfirmation(token.rendererId), nativePixelSha256: sha(cropRgba) }
   ));
   const cropPng = pngFixture(2, 2, cropRgba);
   const native = exportSessionBoundPng({
@@ -269,6 +396,18 @@ try {
   assert.deepEqual(readFileSync(first.path), nativePng,
     'new native crop export must not alter prior PNG files');
   assert.deepEqual(readFileSync(first.provenancePath), sidecar);
+
+  const filesBeforeUnboundPreview = readdirSync(outputDirectory).sort();
+  sessions.withStoreLock(() => sessions.confirmPreview(
+    opened.sessionId, 3, token.rendererId, sourceSha256, 2, 2, cropPreview,
+    runtimeConfirmation(token.rendererId)
+  ));
+  expectCode(() => exportSessionBoundPng({
+    ...request(), pngBytes: cropPng, width: 2, height: 2,
+    expectedPreviewSha256: cropPreview
+  }), 'export_provenance_conflict');
+  assert.deepEqual(readdirSync(outputDirectory).sort(), filesBeforeUnboundPreview,
+    'preview without the separate native pixel binding cannot export');
 
   assert.deepEqual(readFileSync(hostileSentinel), sentinelBytes,
     'the inherited hostile data root must be unchanged');

@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
-  closeSync, existsSync, fsyncSync, lstatSync, openSync,
-  readFileSync, realpathSync, unlinkSync, writeFileSync
+  closeSync, fstatSync, fsyncSync, lstatSync, openSync,
+  readSync, realpathSync, statSync, unlinkSync, writeSync
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { EditorSessions } from './editor-state.mjs';
 import { inspectPng } from './png-integrity.mjs';
 import { withCurrentRenderer } from './renderer-authority.mjs';
@@ -13,6 +15,7 @@ import { withCurrentRenderer } from './renderer-authority.mjs';
 // integration/activation and additional browser/PNG acceptance.
 const hashPattern = /^[a-f0-9]{64}$/;
 const maxExportBytes = 256 * 1024 * 1024;
+const workerFlag = '--pr5-output-worker';
 
 function refuse(code, message) {
   const error = new Error(message);
@@ -20,28 +23,221 @@ function refuse(code, message) {
   throw error;
 }
 
+function sameIdentity(stat, identity) {
+  return stat.isDirectory() && stat.ino !== 0n &&
+    stat.dev === BigInt(identity.dev) && stat.ino === BigInt(identity.ino);
+}
+
+function identityOf(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+
+function samePathDirectory(path, identity) {
+  try { return sameIdentity(statSync(path, { bigint: true }), identity); }
+  catch { return false; }
+}
+
 function requireCanonicalDirectory(path) {
-  // shortcut: Node path APIs cannot pin this directory across writes; require native handle-relative creation before enabling adversarial destinations.
   if (typeof path !== 'string' || !isAbsolute(path) ||
       realpathSync(path) !== resolve(path))
     refuse('invalid_export_directory', 'An existing canonical absolute output directory is required.');
-  const stat = lstatSync(path);
+  const stat = lstatSync(path, { bigint: true });
   if (!stat.isDirectory() || stat.isSymbolicLink())
     refuse('invalid_export_directory', 'Output directory must be a non-symlink directory.');
-  return path;
+  if (stat.ino === 0n)
+    refuse('invalid_export_directory', 'Output directory identity is unavailable.');
+  return { path, identity: identityOf(stat) };
 }
 
-function newFile(path, bytes) {
-  const fd = openSync(path, 'wx', 0o600);
-  let complete = false;
+function writeAll(fd, bytes, offset = 0, length = bytes.length - offset) {
+  let written = 0;
+  while (written < length) {
+    const count = writeSync(fd, bytes, offset + written, length - written);
+    if (!count)
+      throw Object.assign(new Error('Output write made no progress.'), { code: 'EIO' });
+    written += count;
+  }
+}
+
+async function readPngToFile(fd, length, workerInput) {
+  const digest = createHash('sha256');
+  let total = 0;
+  while (total < length) {
+    const { value: chunk, done } = await workerInput.next();
+    if (done || total + chunk.length > length)
+      throw Object.assign(new Error('PNG input ended or exceeded its declared length.'), { code: 'invalid_worker_input' });
+    digest.update(chunk);
+    writeAll(fd, chunk);
+    total += chunk.length;
+  }
+  return digest.digest('hex');
+}
+
+function descriptorHash(fd, length) {
+  if (fstatSync(fd, { bigint: true }).size !== BigInt(length))
+    return null;
+  const digest = createHash('sha256');
+  const buffer = Buffer.alloc(64 * 1024);
+  let offset = 0;
+  while (offset < length) {
+    const count = readSync(fd, buffer, 0, Math.min(buffer.length, length - offset), offset);
+    if (!count)
+      return null;
+    digest.update(buffer.subarray(0, count));
+    offset += count;
+  }
+  return digest.digest('hex');
+}
+
+function removeOwnedFile(path, fd) {
+  if (fd === null)
+    return;
+  const current = lstatSync(path, { bigint: true });
+  const owned = fstatSync(fd, { bigint: true });
+  if (current.isFile() && current.dev === owned.dev && current.ino === owned.ino)
+    unlinkSync(path);
+}
+
+function closeQuietly(fd) {
+  if (fd !== null)
+    try { closeSync(fd); } catch {}
+}
+
+function workerResponse(value) {
+  writeSync(1, Buffer.from(JSON.stringify(value) + '\n'));
+}
+
+async function runOutputWorker(request, workerInput) {
+  let imageFd = null, proofFd = null;
+  let imageName = null, proofName = null;
   try {
-    writeFileSync(fd, bytes);
-    fsyncSync(fd);
-    complete = true;
+    const identity = request.directoryIdentity;
+    const held = fstatSync(3, { bigint: true });
+    if (!sameIdentity(held, identity) || !sameIdentity(statSync('.', { bigint: true }), identity) ||
+        !samePathDirectory(request.directory, identity))
+      return { ok: false, code: 'export_directory_changed' };
+    writeSync(1, Buffer.from('READY\n'));
+
+    if (request.operation === 'cleanup') {
+      for (const file of request.files) {
+        const current = lstatSync(file.name, { bigint: true });
+        if (current.isFile() && current.dev === BigInt(file.identity.dev) &&
+            current.ino === BigInt(file.identity.ino))
+          unlinkSync(file.name);
+      }
+      return { ok: true };
+    }
+
+    if (request.operation !== 'write' ||
+        !/^[A-Za-z0-9_-]{1,80}$/.test(request.safeName) ||
+        !Number.isSafeInteger(request.width) || !Number.isSafeInteger(request.height) ||
+        !Number.isSafeInteger(request.bytes) || request.bytes < 57 || request.bytes > maxExportBytes ||
+        !hashPattern.test(request.pngSha256) || !hashPattern.test(request.pixelSha256))
+      return { ok: false, code: 'invalid_worker_request' };
+
+    for (let suffix = 0; suffix < 10000; suffix++) {
+      const fileName = request.safeName + '-portrait-studio' + (suffix ? ' (' + suffix + ')' : '') + '.png';
+      imageName = fileName;
+      proofName = fileName + '.provenance.json';
+      try { imageFd = openSync(imageName, 'wx+', 0o600); }
+      catch (error) { if (error.code === 'EEXIST') continue; throw error; }
+      try { proofFd = openSync(proofName, 'wx+', 0o600); }
+      catch (error) {
+        removeOwnedFile(imageName, imageFd);
+        closeQuietly(imageFd);
+        imageFd = null;
+        if (error.code === 'EEXIST') continue;
+        throw error;
+      }
+
+      const inputHash = await readPngToFile(imageFd, request.bytes, workerInput);
+      if (inputHash !== request.pngSha256)
+        throw Object.assign(new Error('PNG input hash changed in transit.'), { code: 'export_png_hash_mismatch' });
+      fsyncSync(imageFd);
+      if (descriptorHash(imageFd, request.bytes) !== request.pngSha256)
+        throw Object.assign(new Error('PNG output readback did not match.'), { code: 'export_readback_mismatch' });
+      const provenance = Object.freeze({
+        ...request.provenance, fileName, width: request.width, height: request.height,
+        bytes: request.bytes, pngSha256: request.pngSha256, pixelSha256: request.pixelSha256
+      });
+      const recordBytes = Buffer.from(JSON.stringify(provenance) + '\n');
+      writeAll(proofFd, recordBytes);
+      fsyncSync(proofFd);
+      const provenanceSha256 = descriptorHash(proofFd, recordBytes.length);
+      if (provenanceSha256 !== createHash('sha256').update(recordBytes).digest('hex'))
+        throw Object.assign(new Error('Provenance output readback did not match.'), { code: 'export_readback_mismatch' });
+
+      if (request.pauseBeforeCommit) {
+        writeSync(1, Buffer.from('FILES_READY\n'));
+        const commit = Buffer.alloc(1);
+        const { value: marker, done } = await workerInput.next();
+        if (done || !marker?.length || marker[0] !== 1)
+          throw Object.assign(new Error('Export commit acknowledgement is missing.'), { code: 'invalid_worker_input' });
+      }
+      if (!samePathDirectory(request.directory, identity))
+        throw Object.assign(new Error('Output directory changed during export.'), { code: 'export_directory_changed' });
+      const imageIdentity = identityOf(fstatSync(imageFd, { bigint: true }));
+      const proofIdentity = identityOf(fstatSync(proofFd, { bigint: true }));
+      if (!sameFileIdentity(lstatSync(imageName, { bigint: true }), imageIdentity) ||
+          !sameFileIdentity(lstatSync(proofName, { bigint: true }), proofIdentity))
+        throw Object.assign(new Error('Output entry changed during export.'), { code: 'export_output_changed' });
+      return { ok: true, fileName, provenance, provenanceSha256, imageIdentity, proofIdentity };
+    }
+    return { ok: false, code: 'export_name_exhausted' };
+  } catch (error) {
+    try { removeOwnedFile(proofName, proofFd); } catch {}
+    try { removeOwnedFile(imageName, imageFd); } catch {}
+    return { ok: false, code: error.code || 'export_output_failed' };
   } finally {
-    closeSync(fd);
-    if (!complete)
-      unlinkSync(path);
+    closeQuietly(proofFd);
+    closeQuietly(imageFd);
+  }
+}
+
+function sameFileIdentity(stat, identity) {
+  return stat.isFile() && stat.ino !== 0n &&
+    stat.dev === BigInt(identity.dev) && stat.ino === BigInt(identity.ino);
+}
+
+function runWorker(directory, directoryIdentity, directoryFd, request, input = Buffer.alloc(0)) {
+  if (!sameIdentity(fstatSync(directoryFd, { bigint: true }), directoryIdentity) ||
+      !samePathDirectory(directory, directoryIdentity))
+    refuse('export_directory_changed', 'The output directory changed before export.');
+  const child = spawnSync(process.execPath, [
+    fileURLToPath(import.meta.url), workerFlag,
+    Buffer.from(JSON.stringify({ ...request, directory, directoryIdentity })).toString('base64')
+  ], {
+    cwd: directory, input, encoding: 'utf8', maxBuffer: 1024 * 1024,
+    stdio: ['pipe', 'pipe', 'pipe', directoryFd],
+    env: process.platform === 'win32'
+      ? Object.fromEntries(['SystemRoot', 'WINDIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]))
+      : {},
+    windowsHide: true
+  });
+  if (child.error || child.status !== 0)
+    refuse('export_output_failed', 'The output worker did not complete.');
+  let result;
+  try { result = JSON.parse(child.stdout.trim().split(/\r?\n/).at(-1)); }
+  catch { refuse('export_output_failed', 'The output worker returned an invalid result.'); }
+  if (!result.ok)
+    refuse(result.code || 'export_output_failed', 'The output worker refused the export.');
+  return result;
+}
+
+if (process.argv[2] === workerFlag) {
+  const workerInput = process.stdin[Symbol.asyncIterator]();
+  try {
+    const request = JSON.parse(Buffer.from(process.argv[3], 'base64').toString('utf8'));
+    if (request.pauseBeforeCommit !== undefined && typeof request.pauseBeforeCommit !== 'boolean') {
+      workerResponse({ ok: false, code: 'invalid_worker_request' });
+      process.stdin.destroy();
+    } else {
+      runOutputWorker(request, workerInput).then(workerResponse, error =>
+        workerResponse({ ok: false, code: error.code || 'invalid_worker_request' })).finally(() => process.stdin.destroy());
+    }
+  } catch (error) {
+    workerResponse({ ok: false, code: error.code || 'invalid_worker_request' });
+    process.stdin.destroy();
   }
 }
 
@@ -76,7 +272,7 @@ function validateInput(options) {
 }
 
 export function exportSessionBoundPng(options) {
-  const { directory, safeName } = validateInput(options);
+  const { directory: output, safeName } = validateInput(options);
   const { sessions, storePath, token, width, height,
     expectedPreviewSha256 } = options;
 
@@ -99,25 +295,11 @@ export function exportSessionBoundPng(options) {
         state.preview.revision !== current.revision ||
         state.preview.rendererId !== current.rendererId ||
         state.preview.sha256 !== expectedPreviewSha256 ||
-        state.preview.confirmedBy?.nativePixelSha256 !== preflight.pixelSha256 ||
+        sessions.getConfirmedPreviewPixelSha256(current.sessionId) !== preflight.pixelSha256 ||
         state.preview.confirmedBy?.sourceBuildHash !== current.sourceBuildHash)
       refuse('export_provenance_conflict',
         'Preview, source, revision, renderer or source build is stale or unconfirmed.');
     sessions.prepareExport(current.sessionId, current.revision, current.rendererId, width, height);
-
-    let outputPath, provenancePath, fileName;
-    for (let suffix = 0; suffix < 10000; suffix++) {
-      const name = safeName + '-portrait-studio' + (suffix ? ' (' + suffix + ')' : '') + '.png';
-      const candidate = join(directory, name);
-      if (!existsSync(candidate) && !existsSync(candidate + '.provenance.json')) {
-        outputPath = candidate;
-        provenancePath = candidate + '.provenance.json';
-        fileName = name;
-        break;
-      }
-    }
-    if (!outputPath)
-      refuse('export_name_exhausted', 'No non-overwriting filename is available.');
 
     const provenance = Object.freeze({
       schemaVersion: 1,
@@ -129,46 +311,47 @@ export function exportSessionBoundPng(options) {
       pipelineId: current.pipelineId,
       sourceBuildHash: current.sourceBuildHash,
       previewSha256: expectedPreviewSha256,
-      fileName, width, height, bytes: bytes.length,
+      width, height, bytes: bytes.length,
       pngSha256: preflight.sha256,
       pixelSha256: preflight.pixelSha256
     });
-    const recordBytes = Buffer.from(JSON.stringify(provenance) + '\n');
-    let imageCreated = false, proofCreated = false;
+    const directoryFd = openSync(output.path, 'r');
+    let written;
     try {
-      newFile(outputPath, bytes);
-      imageCreated = true;
-      newFile(provenancePath, recordBytes);
-      proofCreated = true;
-      const written = readFileSync(outputPath);
-      if (!written.equals(bytes) ||
-          !readFileSync(provenancePath).equals(recordBytes))
-        refuse('export_readback_mismatch', 'PNG or provenance readback did not match source bytes.');
-      const readback = inspectPng(written, width, height);
-      if (readback.sha256 !== preflight.sha256 ||
-          readback.pixelSha256 !== preflight.pixelSha256 || written.length !== bytes.length)
-        refuse('export_png_hash_mismatch', 'PNG readback failed byte integrity.');
+      if (!sameIdentity(fstatSync(directoryFd, { bigint: true }), output.identity) ||
+          !samePathDirectory(output.path, output.identity))
+        refuse('export_directory_changed', 'The output directory changed before export.');
+      written = runWorker(output.path, output.identity, directoryFd, {
+        operation: 'write', safeName, width, height, bytes: bytes.length,
+        pngSha256: preflight.sha256, pixelSha256: preflight.pixelSha256,
+        provenance
+      }, bytes);
+      const fileName = written.fileName;
+      const outputPath = join(output.path, fileName);
+      const provenancePath = outputPath + '.provenance.json';
       // This is the original V1-compatible export record. No new fields are
       // written into the PRIVATE-compatible V1 sessions.json schema.
       sessions.recordExport(current.sessionId, current.revision, current.rendererId, {
         path: outputPath, fileName, width, height, bytes: bytes.length,
         sha256: preflight.sha256, pixelSha256: preflight.pixelSha256
       });
+      return Object.freeze({
+        saved: true, sessionId: current.sessionId, revision: current.revision,
+        path: outputPath, provenancePath, fileName, width, height, bytes: bytes.length,
+        sha256: preflight.sha256, pixelSha256: preflight.pixelSha256,
+        provenance: written.provenance, provenanceSha256: written.provenanceSha256
+      });
     } catch (error) {
-      // Only remove files we created exclusively in this invocation. No
-      // preexisting file, source image or original session is overwritten.
-      if (proofCreated)
-        unlinkSync(provenancePath);
-      if (imageCreated)
-        unlinkSync(outputPath);
+      if (written?.ok)
+        try { runWorker(output.path, output.identity, directoryFd, {
+          operation: 'cleanup', files: [
+            { name: written.fileName, identity: written.imageIdentity },
+            { name: written.fileName + '.provenance.json', identity: written.proofIdentity }
+          ]
+        }); } catch {}
       throw error;
+    } finally {
+      closeSync(directoryFd);
     }
-    return Object.freeze({
-      saved: true, sessionId: current.sessionId, revision: current.revision,
-      path: outputPath, provenancePath,
-      fileName, width, height, bytes: bytes.length,
-      sha256: preflight.sha256, pixelSha256: preflight.pixelSha256,
-      provenance, provenanceSha256: createHash('sha256').update(recordBytes).digest('hex')
-    });
   }));
 }
