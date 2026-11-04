@@ -199,6 +199,26 @@ function sameFileIdentity(stat, identity) {
     stat.dev === BigInt(identity.dev) && stat.ino === BigInt(identity.ino);
 }
 
+// A worker's last check does not cover the interval before the parent records
+// the V1 absolute path. Revalidate the still-held directory descriptor AND
+// both exact file identities immediately before any session-state mutation.
+// This closes tested post-worker swaps, not arbitrary changes after this check.
+function verifyPublishedOutput(output, directoryFd, written) {
+  if (!sameIdentity(fstatSync(directoryFd, { bigint: true }), output.identity) ||
+      !samePathDirectory(output.path, output.identity))
+    refuse('export_directory_changed', 'The output directory changed before recording the export.');
+  for (const [name, identity] of [
+    [written.fileName, written.imageIdentity],
+    [written.fileName + '.provenance.json', written.proofIdentity]
+  ]) {
+    let file;
+    try { file = lstatSync(join(output.path, name), { bigint: true }); }
+    catch { refuse('export_output_changed', 'A newly created output is no longer available at its original path.'); }
+    if (!sameFileIdentity(file, identity))
+      refuse('export_output_changed', 'A newly created output changed before session recording.');
+  }
+}
+
 function runWorker(directory, directoryIdentity, directoryFd, request, input = Buffer.alloc(0)) {
   if (!sameIdentity(fstatSync(directoryFd, { bigint: true }), directoryIdentity) ||
       !samePathDirectory(directory, directoryIdentity))
@@ -271,7 +291,7 @@ function validateInput(options) {
   return { directory, safeName };
 }
 
-export function exportSessionBoundPng(options) {
+function exportSessionBoundPngInternal(options, afterWorkerHook = null) {
   const { directory: output, safeName } = validateInput(options);
   const { sessions, storePath, token, width, height,
     expectedPreviewSha256 } = options;
@@ -329,6 +349,11 @@ export function exportSessionBoundPng(options) {
       const fileName = written.fileName;
       const outputPath = join(output.path, fileName);
       const provenancePath = outputPath + '.provenance.json';
+      // Synthetic test hook executes at the exact worker-return/record gap.
+      // The production entry point never accepts or supplies this callback.
+      if (afterWorkerHook)
+        afterWorkerHook();
+      verifyPublishedOutput(output, directoryFd, written);
       // This is the original V1-compatible export record. No new fields are
       // written into the PRIVATE-compatible V1 sessions.json schema.
       sessions.recordExport(current.sessionId, current.revision, current.rendererId, {
@@ -354,4 +379,17 @@ export function exportSessionBoundPng(options) {
       closeSync(directoryFd);
     }
   }));
+}
+
+export function exportSessionBoundPng(options) {
+  return exportSessionBoundPngInternal(options);
+}
+
+// Only a synthetic regression calls this separately named injection point.
+// The normal export request rejects unknown fields and never exposes hooks
+// through the active PRIVATE runtime (this whole module remains inactive).
+export function __testExportSessionBoundPngAfterWorker(options, hook) {
+  if (typeof hook !== 'function')
+    refuse('invalid_test_hook', 'A synchronous synthetic test callback is required.');
+  return exportSessionBoundPngInternal(options, hook);
 }
